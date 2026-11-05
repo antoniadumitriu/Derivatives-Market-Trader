@@ -1,0 +1,46 @@
+name: EEX daily settlements
+
+on:
+  schedule:
+    # 19:37 UTC (20:37 CET), Monday to Friday, after EEX publishes settlements.
+    # GitHub cron runs in UTC and can start a few minutes late.
+    - cron: "37 19 * * 1-5"
+  workflow_dispatch: {}  # adds a "Run workflow" button for manual runs
+
+permissions:
+  contents: write  # lets the workflow commit the new data
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Scrape EEX
+        run: python scraper/scrape_eex.py
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: debug/
+          retention-days: 14
+
+      - name: Commit new data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet || git commit -m "EEX settlements $(date -u +%F)"
+          git push
