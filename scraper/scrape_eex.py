@@ -1,116 +1,238 @@
-"""Daily snapshot of public EEX settlement pages.
+"""Daily collection of EEX futures settlements from the public market data API.
 
-For each page in PAGES this script:
-  1. loads the page in headless Chromium and accepts the cookie banner,
-  2. records every JSON response the page's data widgets fetch (the most
-     robust capture, since it does not depend on the page layout),
-  3. parses any HTML tables on the rendered page into CSV,
-  4. saves a screenshot for debugging.
+How it works:
+  1. Open the EEX power futures page in headless Chromium. The page's widgets
+     call EEX's public JSON API (api.eex-group.com/pub). We record the request
+     headers the page uses and the full contract catalog it downloads.
+  2. Filter the catalog to the contracts in SCOPE.
+  3. From inside the page (so requests look exactly like the website's own),
+     fetch each contract's settlement table for the last LOOKBACK_DAYS days.
+  4. Upsert the rows into data/settlements/<year>.csv, keyed by contract,
+     delivery period and trade date (latest value wins, so corrections are
+     picked up). Write the in-scope catalog to data/contracts.csv and append a
+     line to data/runs.csv.
 
-Output goes to data/YYYY-MM-DD/ (committed by the workflow) and
-debug/YYYY-MM-DD/ (uploaded as a workflow artifact, not committed).
-The script exits with an error if no page yielded any data, so a broken
-run shows up as a failed workflow and GitHub emails you.
+The script exits with an error if most requests fail, so a broken run shows
+up as a failed workflow and GitHub emails you.
 """
 
+import base64
 import datetime as dt
 import json
 import pathlib
-import re
 import sys
-from io import StringIO
+import urllib.parse
 
 import pandas as pd
 from playwright.sync_api import sync_playwright
 
-# Public EEX market data pages to snapshot. Check these URLs in a browser
-# after the first run and adjust if EEX has moved them.
-PAGES = {
-    "power_futures": "https://www.eex.com/en/market-data/power/futures",
-    "power_options": "https://www.eex.com/en/market-data/market-data-hub/power/future-styled-options",
-    "environmental_futures": "https://www.eex.com/en/market-data/environmentals/futures",
-}
+PAGE_URL = "https://www.eex.com/en/market-data/power/futures"
+API = "https://api.eex-group.com/pub"
+LOOKBACK_DAYS = 45  # the public site keeps roughly this much history
+BATCH = 60          # contracts per in-page batch
+CONCURRENCY = 3     # parallel requests inside a batch
+DELAY_MS = 150      # pause between requests per worker, to stay polite
+
+EXCLUDED_AREAS = {"Chubu", "Kansai", "Tokyo"}  # Japanese power
+
+
+def in_scope(c: dict) -> bool:
+    if c["pricing"] != "F":
+        return False
+    if c["commodity"] == "POWER":
+        return (
+            c["product"] in ("Base", "Peak")
+            and c["maturityType"] in ("Month", "Quarter", "Year")
+            and c["area"] not in EXCLUDED_AREAS
+        )
+    if c["commodity"] == "ENVIRONMENTALS":
+        return c["product"] in ("EUA", "UKA", "ETS2")
+    return False
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-TODAY = dt.datetime.now(dt.timezone.utc).date().isoformat()
-DATA_DIR = ROOT / "data" / TODAY
-DEBUG_DIR = ROOT / "debug" / TODAY
+DATA = ROOT / "data"
+DEBUG = ROOT / "debug"
+
+KEY = ["short_code", "maturity", "trade_date"]
+COLUMNS = [
+    "trade_date", "short_code", "commodity", "area", "product", "maturity_type",
+    "maturity", "settlement", "volume", "gross_open_interest_lots",
+    "gross_open_interest_size", "net_open_interest_lots", "net_open_interest_size",
+    "currency", "unit",
+]
+
+FETCH_JS = """
+async ({urls, headers, concurrency, delay}) => {
+  const out = new Array(urls.length);
+  let next = 0;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function worker() {
+    while (next < urls.length) {
+      const i = next++;
+      try {
+        const r = await fetch(urls[i], {headers});
+        out[i] = r.ok ? {status: r.status, body: await r.json()} : {status: r.status};
+      } catch (e) {
+        out[i] = {status: 0, error: String(e)};
+      }
+      await sleep(delay);
+    }
+  }
+  await Promise.all(Array.from({length: concurrency}, worker));
+  return out;
+}
+"""
 
 
-def accept_cookies(page) -> None:
-    pattern = re.compile(r"accept|akzeptieren|agree", re.I)
-    try:
-        page.get_by_role("button", name=pattern).first.click(timeout=5_000)
-    except Exception:
-        pass  # no banner, or already accepted
+def catalog_url() -> str:
+    scope = [{"commodity": "All", "pricing": "All", "area": "All", "product": "All",
+              "productSpecific": "All", "maturityType": "All"}]
+    data = base64.b64encode(json.dumps(scope, separators=(",", ":")).encode()).decode()
+    return f"{API}/customise-widget/filter-data-with-scope?data={data}"
 
 
-def scrape_page(page, name: str, url: str) -> dict:
-    captured = []
+def table_url(c: dict, start: dt.date, end: dt.date) -> str:
+    params = {
+        "shortCode": c["shortCode"], "commodity": c["commodity"], "pricing": c["pricing"],
+        "area": c["area"], "product": c["product"], "maturity": c["maturity"],
+        "startDate": start.isoformat(), "endDate": end.isoformat(),
+        "maturityType": c["maturityType"], "isRolling": "true",
+    }
+    return f"{API}/market-data/table-data?" + urllib.parse.urlencode(params)
 
-    def on_response(resp):
-        try:
-            if resp.request.resource_type not in ("xhr", "fetch"):
-                return
-            if "json" not in resp.headers.get("content-type", ""):
-                return
-            captured.append({"url": resp.url, "status": resp.status, "body": resp.json()})
-        except Exception:
-            pass
 
-    page.on("response", on_response)
-    result = {"page": name, "url": url, "tables": 0, "json_responses": 0, "error": None}
-    try:
-        page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-        accept_cookies(page)
-        try:
-            page.wait_for_selector("table", timeout=30_000)
-        except Exception:
-            pass  # data may only arrive as JSON
-        page.wait_for_timeout(8_000)  # let the widgets finish loading
+def rows_from(c: dict, body: dict) -> list[dict]:
+    h = body.get("header") or []
+    out = []
+    for r in body.get("data") or []:
+        x = dict(zip(h, r))
+        out.append({
+            "trade_date": x.get("tradeDate"),
+            "short_code": c["shortCode"],
+            "commodity": c["commodity"],
+            "area": c["area"],
+            "product": c["product"],
+            "maturity_type": c["maturityType"],
+            "maturity": c["maturity"],
+            "settlement": x.get("settlPx"),
+            "volume": x.get("totVolTrdd"),
+            "gross_open_interest_lots": x.get("grossOpenInt"),
+            "gross_open_interest_size": x.get("grossOpenIntSz"),
+            "net_open_interest_lots": x.get("netOpenInt"),
+            "net_open_interest_size": x.get("netOpenIntSz"),
+            "currency": body.get("currency"),
+            "unit": body.get("uOM"),
+        })
+    return out
 
-        page.screenshot(path=str(DEBUG_DIR / f"{name}.png"), full_page=True)
 
-        try:
-            tables = pd.read_html(StringIO(page.content()))
-        except ValueError:
-            tables = []
-        for i, table in enumerate(tables):
-            table.to_csv(DATA_DIR / f"{name}_table{i}.csv", index=False)
-        result["tables"] = len(tables)
-
-        if captured:
-            with open(DATA_DIR / f"{name}_responses.json", "w") as f:
-                json.dump(captured, f, ensure_ascii=False, indent=1)
-        result["json_responses"] = len(captured)
-    except Exception as exc:
-        result["error"] = repr(exc)
-    finally:
-        page.remove_listener("response", on_response)
-    return result
+def upsert(rows: list[dict]) -> int:
+    """Merge rows into one CSV per trade year. Returns number of new keys."""
+    if not rows:
+        return 0
+    new = pd.DataFrame(rows, columns=COLUMNS).dropna(subset=["trade_date"])
+    new["maturity"] = new["maturity"].astype(str)
+    out_dir = DATA / "settlements"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    added = 0
+    for year, part in new.groupby(new["trade_date"].str[:4]):
+        path = out_dir / f"{year}.csv"
+        if path.exists():
+            old = pd.read_csv(path, dtype={"maturity": str})
+            before = set(map(tuple, old[KEY].astype(str).values))
+            merged = pd.concat([old, part]).drop_duplicates(KEY, keep="last")
+        else:
+            before = set()
+            merged = part.drop_duplicates(KEY, keep="last")
+        after = set(map(tuple, merged[KEY].astype(str).values))
+        added += len(after - before)
+        merged.sort_values(["trade_date", "commodity", "area", "short_code", "maturity"]) \
+              .to_csv(path, index=False)
+    return added
 
 
 def main() -> int:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    DATA.mkdir(exist_ok=True)
+    DEBUG.mkdir(exist_ok=True)
+    today = dt.datetime.now(dt.timezone.utc).date()
+    start = today - dt.timedelta(days=LOOKBACK_DAYS)
 
-    results = []
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        context = browser.new_context(locale="en-GB", viewport={"width": 1600, "height": 2400})
-        page = context.new_page()
-        for name, url in PAGES.items():
-            res = scrape_page(page, name, url)
-            print(json.dumps(res))
-            results.append(res)
+        page = browser.new_context(locale="en-GB").new_page()
+
+        api_headers = {}
+        catalog = {}
+
+        def on_request(req):
+            if req.url.startswith(API) and not api_headers:
+                for k, v in req.headers.items():
+                    if k.lower() not in ("referer", "origin", "user-agent", "cookie", "host") \
+                            and not k.lower().startswith("sec-"):
+                        api_headers[k] = v
+
+        def on_response(resp):
+            if "filter-data-with-scope" in resp.url and not catalog:
+                try:
+                    catalog.update(resp.json())
+                except Exception:
+                    pass
+
+        page.on("request", on_request)
+        page.on("response", on_response)
+        page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=60_000)
+        try:
+            page.get_by_role("button", name="Accept", exact=False).first.click(timeout=5_000)
+        except Exception:
+            pass
+        page.wait_for_timeout(10_000)
+        page.screenshot(path=str(DEBUG / "page.png"))
+
+        if not catalog:  # page did not load it; fetch it ourselves
+            res = page.evaluate(FETCH_JS, {"urls": [catalog_url()], "headers": api_headers,
+                                           "concurrency": 1, "delay": 0})[0]
+            if res.get("status") == 200:
+                catalog.update(res["body"])
+        if not catalog.get("data"):
+            print("Could not load the EEX contract catalog.")
+            return 1
+
+        h = catalog["header"]
+        contracts = [c for c in (dict(zip(h, r)) for r in catalog["data"]) if in_scope(c)]
+        contracts = list({(c["shortCode"], c["maturity"]): c for c in contracts}.values())
+        pd.DataFrame(contracts).sort_values(["commodity", "area", "shortCode", "maturity"]) \
+            .to_csv(DATA / "contracts.csv", index=False)
+        print(f"{len(contracts)} contracts in scope; API headers: {sorted(api_headers)}")
+
+        rows, ok, failed, statuses = [], 0, 0, {}
+        for i in range(0, len(contracts), BATCH):
+            chunk = contracts[i:i + BATCH]
+            results = page.evaluate(FETCH_JS, {
+                "urls": [table_url(c, start, today) for c in chunk],
+                "headers": api_headers, "concurrency": CONCURRENCY, "delay": DELAY_MS,
+            })
+            for c, res in zip(chunk, results):
+                st = res.get("status", 0)
+                statuses[st] = statuses.get(st, 0) + 1
+                if st == 200 and isinstance(res.get("body"), dict):
+                    ok += 1
+                    rows.extend(rows_from(c, res["body"]))
+                else:
+                    failed += 1
+            print(f"  {min(i + BATCH, len(contracts))}/{len(contracts)} done, {failed} failed")
         browser.close()
 
-    manifest = {"run_utc": dt.datetime.now(dt.timezone.utc).isoformat(), "pages": results}
-    with open(DATA_DIR / "manifest.json", "w") as f:
-        json.dump(manifest, f, indent=1)
+    added = upsert(rows)
+    run = {"run_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+           "contracts": len(contracts), "ok": ok, "failed": failed,
+           "rows_fetched": len(rows), "new_rows": added}
+    log = DATA / "runs.csv"
+    pd.DataFrame([run]).to_csv(log, mode="a", header=not log.exists(), index=False)
+    print(json.dumps(run), "statuses:", statuses)
 
-    if not any(r["tables"] or r["json_responses"] for r in results):
-        print("No data captured from any page. Check the screenshots in the workflow artifact.")
+    if ok < 0.5 * max(len(contracts), 1):
+        print("More than half of the requests failed.")
         return 1
     return 0
 

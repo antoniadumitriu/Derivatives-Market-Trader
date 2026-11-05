@@ -1,20 +1,25 @@
 # EEX settlement scraper
 
-Takes a daily snapshot of public EEX settlement pages (power futures, power options, environmental futures) so that price history builds up over time. The public site only shows the last 45 days, so every missed day is lost history.
+Collects daily settlement prices for EEX power and carbon futures so that price history builds up over time. The public EEX website only keeps about 45 days of history, so every missed day is lost data. Part of the project "Bayesian Modeling of European Power and Carbon Derivative Markets".
+
+## What it collects
+
+- **Power futures:** base and peak load, month, quarter and year contracts, for every European area EEX lists (DE, FR, AT, NL, BE, IT, ES, CH, CZ, HU, PL, Nordic and the Nordic price areas, and more). Japanese power is excluded.
+- **Carbon futures:** EUA, UK allowances (UKA) and ETS2.
+
+About 1,200 contracts in total. The scope is set in `in_scope()` in `scraper/scrape_eex.py`.
 
 ## How it works
 
-A GitHub Actions workflow runs every weekday at 19:37 UTC. It loads each page in headless Chromium, saves every JSON response the page's data widgets fetch, parses any HTML tables to CSV, and commits the results to `data/YYYY-MM-DD/`. Screenshots are uploaded as a workflow artifact for debugging.
+A GitHub Actions workflow runs every weekday at 19:37 UTC, after EEX publishes settlements. It opens the EEX power futures page in headless Chromium, reads the contract catalog the page downloads from EEX's public market data API, and then requests the last 45 days of settlements for each in-scope contract from within the page, a few at a time with pauses. Each request returns the full 45-day window, so missed days are filled in automatically on the next run.
 
 ## Output
 
-For each page, a day's folder can contain:
+- `data/settlements/<year>.csv`: one row per contract, delivery period and trade date, with settlement price, volume and open interest. Rows are upserted, so a corrected settlement replaces the old value.
+- `data/contracts.csv`: the in-scope contract catalog as of the latest run.
+- `data/runs.csv`: one line per run with counts of contracts, successful and failed requests, and new rows.
 
-- `<page>_responses.json`: raw JSON fetched by the page (most complete, layout-independent)
-- `<page>_tableN.csv`: tables parsed from the rendered page
-- `manifest.json`: what was captured from each page and any errors
-
-Parsing these into a clean settlements table is a separate step.
+A screenshot of the page is uploaded as a workflow artifact for debugging.
 
 ## Running manually
 
@@ -30,6 +35,6 @@ python scraper/scrape_eex.py
 
 ## Notes
 
-- Check the EEX website terms of use regarding automated access. Keep the request rate low (this script loads three pages once a day).
-- If EEX changes its page layout or URLs, update `PAGES` in `scraper/scrape_eex.py`. A run that captures nothing fails on purpose, so GitHub emails you.
-- GitHub may pause scheduled workflows in repositories with no activity for 60 days. Watch for the warning email and re-enable from the Actions tab if needed.
+- Check the EEX website terms of use regarding automated access. The script spaces its requests out and runs once a day.
+- If most requests fail, the run fails on purpose so GitHub emails you. Check the log and the screenshot artifact.
+- GitHub may pause scheduled workflows in repositories with no activity for 60 days. The daily commits normally prevent this, but watch for the warning email.
