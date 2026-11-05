@@ -29,9 +29,10 @@ from playwright.sync_api import sync_playwright
 PAGE_URL = "https://www.eex.com/en/market-data/power/futures"
 API = "https://api.eex-group.com/pub"
 LOOKBACK_DAYS = 45  # the public site keeps roughly this much history
-BATCH = 60          # contracts per in-page batch
-CONCURRENCY = 3     # parallel requests inside a batch
-DELAY_MS = 150      # pause between requests per worker, to stay polite
+BATCH = 50          # contracts per in-page batch (progress is logged per batch)
+CONCURRENCY = 1     # one request at a time: the API rate-limits bursts
+DELAY_MS = 900      # pause between requests, to stay under the rate limit
+RETRIES = 4         # retries per request when throttled, with back-off
 
 EXCLUDED_AREAS = {"Chubu", "Kansai", "Tokyo"}  # Japanese power
 
@@ -63,19 +64,30 @@ COLUMNS = [
 ]
 
 FETCH_JS = """
-async ({urls, headers, concurrency, delay}) => {
+async ({urls, headers, concurrency, delay, retries}) => {
   const out = new Array(urls.length);
   let next = 0;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function get(url) {
+    let wait = 15000;
+    for (let attempt = 0; ; attempt++) {
+      let res;
+      try {
+        const r = await fetch(url, {headers});
+        res = r.ok ? {status: r.status, body: await r.json()} : {status: r.status};
+      } catch (e) {
+        res = {status: 0, error: String(e)};  // throttled responses surface as network errors
+      }
+      const retryable = res.status === 0 || res.status === 429 || res.status >= 500;
+      if (!retryable || attempt >= retries) return res;
+      await sleep(wait);
+      wait = Math.min(wait * 2, 60000);
+    }
+  }
   async function worker() {
     while (next < urls.length) {
       const i = next++;
-      try {
-        const r = await fetch(urls[i], {headers});
-        out[i] = r.ok ? {status: r.status, body: await r.json()} : {status: r.status};
-      } catch (e) {
-        out[i] = {status: 0, error: String(e)};
-      }
+      out[i] = await get(urls[i]);
       await sleep(delay);
     }
   }
@@ -191,7 +203,7 @@ def main() -> int:
 
         if not catalog:  # page did not load it; fetch it ourselves
             res = page.evaluate(FETCH_JS, {"urls": [catalog_url()], "headers": api_headers,
-                                           "concurrency": 1, "delay": 0})[0]
+                                           "concurrency": 1, "delay": 0, "retries": RETRIES})[0]
             if res.get("status") == 200:
                 catalog.update(res["body"])
         if not catalog.get("data"):
@@ -211,6 +223,7 @@ def main() -> int:
             results = page.evaluate(FETCH_JS, {
                 "urls": [table_url(c, start, today) for c in chunk],
                 "headers": api_headers, "concurrency": CONCURRENCY, "delay": DELAY_MS,
+                "retries": RETRIES,
             })
             for c, res in zip(chunk, results):
                 st = res.get("status", 0)
