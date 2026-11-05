@@ -11,7 +11,7 @@ About 1,200 contracts in total. The scope is set in `in_scope()` in `scraper/scr
 
 ## How it works
 
-A GitHub Actions workflow runs every weekday at 19:37 UTC, after EEX publishes settlements. It opens the EEX power futures page in headless Chromium, reads the contract catalog the page downloads from EEX's public market data API, and then requests the last 45 days of settlements for each in-scope contract from within the page, a few at a time with pauses. Each request returns the full 45-day window, so missed days are filled in automatically on the next run.
+A GitHub Actions workflow runs every weekday at 19:37 UTC, after EEX publishes settlements. It opens the EEX power futures page in headless Chromium, reads the contract catalog the page downloads from EEX's public market data API, and then requests the last 45 days of settlements for each in-scope contract from within the page, one at a time with pauses, backing off and retrying if the API throttles it. A full run takes about 25 minutes. Each request returns the full 45-day window, so missed days are filled in automatically on the next run.
 
 ## Output
 
