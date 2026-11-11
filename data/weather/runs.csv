@@ -1,2 +1,3 @@
 run_utc,start,end,datasets,actuals_new_rows,forecast_rows,errors
 2026-11-11T17:17:52Z,2021-01-01,2026-11-11,"actuals,forecasts",616608,4566,
+2026-11-11T17:28:36Z,2026-10-28,2026-11-11,"actuals,forecasts",0,0,

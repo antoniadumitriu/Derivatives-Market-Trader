@@ -2,3 +2,4 @@ run_utc,start,end,datasets,ok,failed,new_rows
 2026-11-11T14:15:18Z,2026-11-04,2026-11-12,"prices,generation,forecasts,crossborder,installed",69,1,18264
 2026-11-11T14:32:07Z,2021-01-01,2026-11-12,prices,384,0,1250037
 2026-11-11T17:14:23Z,2021-01-01,2026-11-12,"crossborder,forecasts",827,19,756974
+2026-11-11T17:28:29Z,2026-11-04,2026-11-12,"prices,generation,forecasts,crossborder,installed",67,6,19
