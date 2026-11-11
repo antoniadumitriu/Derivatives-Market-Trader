@@ -24,7 +24,11 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
+          python -m playwright install chromium
+          # System libraries and fonts. Ubuntu's mirrors are sometimes unreachable from
+          # GitHub runners; retry, then carry on, since the runner image already has
+          # most of what headless Chromium needs.
+          for i in 1 2 3; do python -m playwright install-deps chromium && break; sleep 30; done || true
 
       - name: Scrape EEX
         run: python -m connectors.eex.scrape_eex
