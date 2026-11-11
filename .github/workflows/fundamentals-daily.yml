@@ -11,6 +11,11 @@ on:
         description: "Backfill from this date (YYYY-MM-DD). Leave blank for the normal daily lookback."
         required: false
         default: ""
+      connectors:
+        description: "Which connectors to run"
+        type: choice
+        options: [all, energy_charts, open_meteo]
+        default: all
 
 permissions:
   contents: write  # lets the workflow commit the new data
@@ -24,6 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
+      PYTHONUNBUFFERED: "1"  # show progress in the log as it happens
       START: ${{ inputs.start }}
     steps:
       - uses: actions/checkout@v4
@@ -37,11 +43,13 @@ jobs:
 
       - name: Energy-Charts (prices, generation, forecasts, flows, capacity)
         id: energy_charts
+        if: inputs.connectors != 'open_meteo'
         continue-on-error: true
         run: python -m connectors.energy_charts.fetch ${START:+--start "$START"}
 
       - name: Open-Meteo (weather actuals and forecasts)
         id: open_meteo
+        if: inputs.connectors != 'energy_charts'
         continue-on-error: true
         run: python -m connectors.open_meteo.fetch ${START:+--start "$START"}
 

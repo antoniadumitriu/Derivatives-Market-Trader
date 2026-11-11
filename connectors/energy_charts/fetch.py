@@ -113,8 +113,9 @@ def forecasts(start, end, s: Stats):
                         idx = part if idx is None else idx.join(part, how="outer")
                     s.ok += 1
                 except Exception as e:
-                    # Not every country publishes every forecast type; a 404 here is expected.
-                    if "404" not in str(e):
+                    # Not every country publishes every forecast type; the API answers
+                    # 400 or 404 for those, which is expected.
+                    if not any(code in str(e) for code in ("400 Client", "404 Client")):
                         s.fail(f"forecast {c} {t} {a}", e)
                 time.sleep(PAUSE)
             if idx is not None:
@@ -156,7 +157,8 @@ def installed(start, end, s: Stats):
                                      "technology": snake(p["name"]), "capacity_gw": v})
                 s.ok += 1
             except Exception as e:
-                if "404" not in str(e):  # monthly data only exists for some countries
+                if not any(code in str(e) for code in ("400 Client", "404 Client")):
+                    # monthly data only exists for some countries
                     s.fail(f"installed {c} {step}", e)
             time.sleep(PAUSE)
     if rows:
