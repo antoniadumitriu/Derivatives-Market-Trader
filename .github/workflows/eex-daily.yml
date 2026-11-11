@@ -27,7 +27,7 @@ jobs:
           python -m playwright install --with-deps chromium
 
       - name: Scrape EEX
-        run: python scraper/scrape_eex.py
+        run: python -m connectors.eex.scrape_eex
 
       - name: Upload screenshots
         if: always()
@@ -38,9 +38,5 @@ jobs:
           retention-days: 14
 
       - name: Commit new data
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data
-          git diff --cached --quiet || git commit -m "EEX settlements $(date -u +%F)"
-          git push
+        if: always()
+        run: .github/scripts/commit-data.sh "EEX settlements $(date -u +%F)"
