@@ -1,0 +1,56 @@
+name: Fundamentals daily
+
+on:
+  schedule:
+    # 13:17 UTC every day, after the day-ahead auction results (about 12:45 CET).
+    # GitHub cron runs in UTC and can start late.
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Backfill from this date (YYYY-MM-DD). Leave blank for the normal daily lookback."
+        required: false
+        default: ""
+
+permissions:
+  contents: write  # lets the workflow commit the new data
+
+concurrency:
+  group: fundamentals
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      START: ${{ inputs.start }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install "pandas>=2.2" "requests>=2.31"
+
+      - name: Energy-Charts (prices, generation, forecasts, flows, capacity)
+        id: energy_charts
+        continue-on-error: true
+        run: python -m connectors.energy_charts.fetch ${START:+--start "$START"}
+
+      - name: Open-Meteo (weather actuals and forecasts)
+        id: open_meteo
+        continue-on-error: true
+        run: python -m connectors.open_meteo.fetch ${START:+--start "$START"}
+
+      - name: Commit new data
+        if: always()
+        run: .github/scripts/commit-data.sh "Fundamentals $(date -u +%F)"
+
+      - name: Fail the run if a connector failed
+        if: steps.energy_charts.outcome == 'failure' || steps.open_meteo.outcome == 'failure'
+        run: |
+          echo "Energy-Charts: ${{ steps.energy_charts.outcome }}, Open-Meteo: ${{ steps.open_meteo.outcome }}"
+          exit 1

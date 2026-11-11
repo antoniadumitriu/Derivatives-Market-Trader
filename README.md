@@ -1,40 +1,62 @@
-# EEX settlement scraper
+# Derivatives Market Trader
 
-Collects daily settlement prices for EEX power and carbon futures so that price history builds up over time. The public EEX website only keeps about 45 days of history, so every missed day is lost data. Part of the project "Bayesian Modeling of European Power and Carbon Derivative Markets".
+Data collection, and later modeling, for Bayesian models of European power and carbon derivative markets. Every source used here is free and public and needs no API key or account.
 
-## What it collects
+## Layout
 
-- **Power futures:** base and peak load, month, quarter and year contracts, for every European area EEX lists (DE, FR, AT, NL, BE, IT, ES, CH, CZ, HU, PL, Nordic and the Nordic price areas, and more). Japanese power is excluded.
-- **Carbon futures:** EUA, UK allowances (UKA) and ETS2.
+```
+connectors/
+  common.py              shared helpers (HTTP retries, CSV upserts)
+  eex/scrape_eex.py      EEX futures settlements (power and carbon)
+  energy_charts/fetch.py Energy-Charts: spot prices, generation, forecasts, flows, capacity
+  open_meteo/fetch.py    Open-Meteo: weather actuals and forecast snapshots
+data/
+  eex/                   settlements/<year>.csv, contracts.csv, runs.csv
+  energy_charts/         prices/, generation/, forecasts/, crossborder/ (one CSV per UTC month),
+                         installed_capacity.csv, runs.csv
+  weather/               actuals/, forecasts/ (one CSV per month), points.csv, runs.csv
+.github/workflows/
+  eex-daily.yml          weekdays 19:37 UTC
+  fundamentals-daily.yml every day 13:17 UTC (Energy-Charts and Open-Meteo)
+```
 
-About 1,200 contracts in total. The scope is set in `in_scope()` in `scraper/scrape_eex.py`.
+All timestamps are UTC, written as `YYYY-MM-DDTHH:MM:SSZ`. Every connector upserts: re-running it over a period it has already collected replaces values with the latest published ones and never creates duplicates.
 
-## How it works
+## Datasets
 
-A GitHub Actions workflow runs every weekday at 19:37 UTC, after EEX publishes settlements. It opens the EEX power futures page in headless Chromium, reads the contract catalog the page downloads from EEX's public market data API, and then requests the last 45 days of settlements for each in-scope contract from within the page, one at a time with pauses, backing off and retrying if the API throttles it. A full run takes about 25 minutes. Each request returns the full 45-day window, so missed days are filled in automatically on the next run.
+| Folder | Content | Resolution | Units | History |
+|---|---|---|---|---|
+| `eex/settlements` | ~1,200 futures: power base and peak (month, quarter, year) for all European EEX areas, plus EUA, UKA, ETS2. Settlement price, volume, open interest | daily | EUR/MWh, EUR/t | builds up from Sept 2026 (EEX only shows 45 days) |
+| `energy_charts/prices` | Day-ahead auction prices for 16 bidding zones (DE-LU, FR, NL, BE, AT, CH, PL, CZ, HU, SI, IT-North, ES, DK1, DK2, NO2, SE4) | native: hourly to Sept 2025, 15 min after | EUR/MWh | from 2021 |
+| `energy_charts/generation` | Net public generation by technology, load, residual load, renewable shares, for DE, FR, NL, BE, AT, CH, PL, CZ | hourly mean | MW (shares in %) | from 2021 |
+| `energy_charts/forecasts` | Day-ahead forecasts of solar, onshore and offshore wind, and load, same countries (where published) | hourly mean | MW | from 2021 |
+| `energy_charts/crossborder` | Physical cross-border flows by neighbour, same countries. Positive means import into the country | hourly mean | GW | from 2021 |
+| `energy_charts/installed_capacity.csv` | Installed capacity by technology (yearly, and monthly where available) | yearly / monthly | GW | full |
+| `weather/actuals` | Temperature, 100 m wind speed, solar radiation, cloud cover at 12 points (see `points.csv`) | hourly | °C, m/s, W/m², % | from 2021 |
+| `weather/forecasts` | Daily snapshot of the 16-day forecast at the same points, keyed by issue date | hourly | as above | builds up from Nov 2026 |
 
-## Output
+## Running
 
-- `data/settlements/<year>.csv`: one row per contract, delivery period and trade date, with settlement price, volume and open interest. Rows are upserted, so a corrected settlement replaces the old value.
-- `data/contracts.csv`: the in-scope contract catalog as of the latest run.
-- `data/runs.csv`: one line per run with counts of contracts, successful and failed requests, and new rows.
-
-A screenshot of the page is uploaded as a workflow artifact for debugging.
-
-## Running manually
-
-On GitHub: Actions tab, "EEX daily settlements", "Run workflow".
+The workflows run on their own. To run one by hand: Actions tab, pick the workflow, "Run workflow". The fundamentals workflow takes an optional start date for backfills.
 
 Locally:
 
 ```
 pip install -r requirements.txt
-python -m playwright install chromium
-python scraper/scrape_eex.py
+python -m playwright install chromium     # only needed for EEX
+python -m connectors.eex.scrape_eex
+python -m connectors.energy_charts.fetch  [--start 2021-01-01] [--datasets prices,generation]
+python -m connectors.open_meteo.fetch     [--start 2021-01-01] [--datasets actuals]
 ```
+
+## Sources and terms
+
+- **EEX** public market data pages. Check the EEX terms of use regarding automated access; the scraper spaces requests out and runs once a day.
+- **Energy-Charts** (Fraunhofer ISE), data under CC BY 4.0, with upstream sources such as ENTSO-E and Bundesnetzagentur/SMARD named in the API responses. Cite them if you publish results.
+- **Open-Meteo**, data under CC BY 4.0. The free API is for non-commercial use; a commercial product needs one of their paid plans.
 
 ## Notes
 
-- Check the EEX website terms of use regarding automated access. The script spaces its requests out and runs once a day.
-- If most requests fail, the run fails on purpose so GitHub emails you. Check the log and the screenshot artifact.
-- GitHub may pause scheduled workflows in repositories with no activity for 60 days. The daily commits normally prevent this, but watch for the warning email.
+- A connector that fails mostly or completely makes its workflow run fail, so GitHub emails you. Data that was collected before the failure is still committed.
+- Scheduled GitHub runs often start a few hours late. This does not lose data: every run re-fetches a lookback window (EEX 45 days, Energy-Charts 7 days, weather 14 days).
+- GitHub may pause scheduled workflows in repositories with no activity for 60 days. The daily commits normally prevent this.

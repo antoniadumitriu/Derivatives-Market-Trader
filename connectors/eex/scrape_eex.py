@@ -7,10 +7,10 @@ How it works:
   2. Filter the catalog to the contracts in SCOPE.
   3. From inside the page (so requests look exactly like the website's own),
      fetch each contract's settlement table for the last LOOKBACK_DAYS days.
-  4. Upsert the rows into data/settlements/<year>.csv, keyed by contract,
+  4. Upsert the rows into data/eex/settlements/<year>.csv, keyed by contract,
      delivery period and trade date (latest value wins, so corrections are
-     picked up). Write the in-scope catalog to data/contracts.csv and append a
-     line to data/runs.csv.
+     picked up). Write the in-scope catalog to data/eex/contracts.csv and append a
+     line to data/eex/runs.csv.
 
 The script exits with an error if most requests fail, so a broken run shows
 up as a failed workflow and GitHub emails you.
@@ -51,8 +51,8 @@ def in_scope(c: dict) -> bool:
     return False
 
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-DATA = ROOT / "data"
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+DATA = ROOT / "data" / "eex"
 DEBUG = ROOT / "debug"
 
 KEY = ["short_code", "maturity", "trade_date"]
@@ -165,7 +165,7 @@ def upsert(rows: list[dict]) -> int:
 
 
 def main() -> int:
-    DATA.mkdir(exist_ok=True)
+    DATA.mkdir(parents=True, exist_ok=True)
     DEBUG.mkdir(exist_ok=True)
     today = dt.datetime.now(dt.timezone.utc).date()
     start = today - dt.timedelta(days=LOOKBACK_DAYS)
