@@ -146,7 +146,7 @@ def installed(start, end, s: Stats):
     for c in COUNTRIES:
         for step in ("yearly", "monthly"):
             try:
-                d = get_json(f"{API}/installed_power", {"country": c, "time_step": step}, retries=1)
+                d = get_json(f"{API}/installed_power", {"country": c, "time_step": step})
                 for p in d.get("production_types", []):
                     for period, v in zip(d["time"], p["data"]):
                         if v is None:
