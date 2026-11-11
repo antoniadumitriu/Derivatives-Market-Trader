@@ -1,0 +1,13 @@
+point,country,latitude,longitude,purpose
+de_hamburg,de,53.55,9.99,"demand, north"
+de_berlin,de,52.52,13.4,"demand, east"
+de_ruhr,de,51.46,7.01,"demand, industry"
+de_frankfurt,de,50.11,8.68,"demand, centre"
+de_munich,de,48.14,11.58,"demand and solar, south"
+de_stuttgart,de,48.78,9.18,"solar, south-west"
+de_nordfriesland,de,54.6,8.9,"onshore wind, north coast"
+de_brandenburg,de,52.8,12.5,"onshore wind and solar, east"
+de_north_sea,de,54.3,6.5,"offshore wind, North Sea"
+de_baltic,de,54.7,13.8,"offshore wind, Baltic"
+fr_paris,fr,48.86,2.35,French demand (heating-sensitive)
+nl_amsterdam,nl,52.37,4.9,Dutch demand and wind
