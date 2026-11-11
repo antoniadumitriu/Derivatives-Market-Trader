@@ -26,9 +26,9 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install chromium
           # System libraries and fonts. Ubuntu's mirrors are sometimes unreachable from
-          # GitHub runners; retry, then carry on, since the runner image already has
-          # most of what headless Chromium needs.
-          for i in 1 2 3; do python -m playwright install-deps chromium && break; sleep 30; done || true
+          # GitHub runners; give up after 5 minutes and carry on, since the runner
+          # image already has most of what headless Chromium needs.
+          timeout 300 python -m playwright install-deps chromium || echo "::warning::System package install failed or timed out; continuing"
 
       - name: Scrape EEX
         run: python -m connectors.eex.scrape_eex
