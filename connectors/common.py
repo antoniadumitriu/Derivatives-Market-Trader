@@ -1,5 +1,7 @@
 """Shared helpers for the data connectors: paths, HTTP with retries, CSV upserts."""
 
+from __future__ import annotations
+
 import datetime as dt
 import pathlib
 import time
