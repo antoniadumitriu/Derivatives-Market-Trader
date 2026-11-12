@@ -1,7 +1,7 @@
 """Write the model report (README.md and charts) from the model outputs.
 
-  python -m models.report_de_base_month             # v2 (with gas and carbon), compared with v1
-  python -m models.report_de_base_month --model v1
+  python -m models.report_de_base_month --model v3_solar   # any of: v1, v2, v3_solar, v3_seasonal, v3_both
+Each report compares its backtest with every other version that has one.
 """
 
 import argparse
@@ -17,6 +17,7 @@ import pandas as pd
 
 from models.de_base_month import OUT as OUT_V1
 from models.de_base_month_v2 import OUT as OUT_V2
+from models.de_base_month_v3 import out_dir as v3_out
 from pipeline.build_db import DB
 
 MODEL = "#2a78d6"     # categorical slot 1
@@ -48,6 +49,20 @@ def intervals(ax, x, df, observed, observed_label):
     ax.scatter(x, observed, s=64, color=OBSERVED, edgecolor=SURFACE, linewidth=2, zorder=4, label=observed_label)
 
 
+OUTS = {"v1": OUT_V1, "v2": OUT_V2, "v3_solar": v3_out("solar"), "v3_seasonal": v3_out("seasonal"),
+        "v3_both": v3_out("both")}
+NAMES = {"v1": "Version 1: price level only", "v2": "Version 2: gas and carbon",
+         "v3_solar": "Version 3: v2 + today's solar fleet in scenarios",
+         "v3_seasonal": "Variant: v2 + calendar-month term", "v3_both": "Variant: v2 + both"}
+V3_SOLAR = """Version 3 is version 2 with one change in how a delivery month's residual load is simulated. Version 2
+took past years' residual load as it was, but solar capacity keeps growing, so past summers had more residual load
+than this summer will. Version 3 takes past years' weather with **today's solar fleet**: each past year's solar
+output is scaled by installed solar capacity now versus then (wind is left as it was; scaling it too overstated
+winter wind). Over 2024 to 2026 this cut the average error in assumed residual load from 4.2 to 2.8 GW, and in
+summer the bias from +4.8 to +1.5 GW."""
+V3_SEASONAL = """This variant adds a shift in the price/cost multiple for each calendar month to version 2 (12 shifts,
+centred to average zero), to test whether the summer over-forecast was a seasonal pattern in how far power trades
+below the gas-plant cost."""
 DESCRIPTION = {
     "v1": """It models the daily German day-ahead base price as a weekly-varying **price level**, plus a weekly-varying
 **merit-order slope** times standardised residual load (load minus wind and solar), plus a weekend effect,
@@ -70,6 +85,10 @@ gas-price uncertainty that grows with time to delivery (volatility from the last
 load drawn from the same calendar month of the last 3 years. In the backtest, where old TTF contract prices are
 not available, the TTF front month at the forecast date stands in for the delivery month's gas price.""",
 }
+DESCRIPTION["v3_solar"] = DESCRIPTION["v2"] + "\n\n" + V3_SOLAR
+DESCRIPTION["v3_seasonal"] = DESCRIPTION["v2"] + "\n\n" + V3_SEASONAL
+DESCRIPTION["v3_both"] = DESCRIPTION["v2"] + "\n\n" + V3_SOLAR + "\n\n" + V3_SEASONAL
+STATE_LABELS_V2 = None
 STATE_LABELS = {
     "v1": {"tau_level": "Weekly change in level (s.d.), EUR/MWh", "tau_beta": "Weekly change in slope (s.d.)",
            "level_last_week": "Current level, EUR/MWh", "beta_last_week": "Current slope, EUR/MWh per s.d. of residual load",
@@ -80,6 +99,11 @@ STATE_LABELS = {
            "phi": "Share of volatility that scales with fuel cost (0 to 1)", "gamma": "Weekend effect, EUR/MWh",
            "nu": "Student-t degrees of freedom"},
 }
+for _v in ("v3_solar", "v3_seasonal", "v3_both"):
+    STATE_LABELS[_v] = dict(STATE_LABELS["v2"])
+for _v in ("v3_seasonal", "v3_both"):
+    STATE_LABELS[_v].update({f"season_{m}": f"Calendar-month shift, {m.title()}" for m in
+                             ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")})
 
 
 def metrics(bt):
@@ -89,10 +113,9 @@ def metrics(bt):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", choices=["v1", "v2"], default="v2")
+    ap.add_argument("--model", choices=list(OUTS), default="v3_solar")
     version = ap.parse_args().model
-    OUT = OUT_V2 if version == "v2" else OUT_V1
-    other = OUT_V1 if version == "v2" else None
+    OUT = OUTS[version]
     bt = pd.read_csv(OUT / "backtest.csv", dtype={"target": str}).set_index("target")
     fc = pd.read_csv(OUT / "forecast.csv", dtype={"month": str}).set_index("month")
     params = json.loads((OUT / "params.json").read_text())
@@ -141,21 +164,30 @@ def main():
 
     param_rows = "\n".join(f"| {label} | {p[k]['mean']:.2f} | {p[k]['p05']:.2f} to {p[k]['p95']:.2f} |"
                            for k, label in STATE_LABELS[version].items() if k in p)
+    others = {v: pd.read_csv(o / "backtest.csv", dtype={"target": str}) for v, o in OUTS.items()
+              if (o / "backtest.csv").exists()}
     compare = ""
-    if other is not None and (other / "backtest.csv").exists():
-        a, b = metrics(pd.read_csv(other / "backtest.csv")), metrics(bt)
-        compare = f"""
-### Compared with version 1 (same months)
-
-| | Version 1 | Version 2 |
-|---|---|---|
-| Mean absolute error, EUR/MWh | {a['mae']:.1f} | {b['mae']:.1f} |
-| Mean error (bias), EUR/MWh | {a['bias']:+.1f} | {b['bias']:+.1f} |
-| 50% interval coverage | {a['in50']:.0%} | {b['in50']:.0%} |
-| 90% interval coverage | {a['in90']:.0%} | {b['in90']:.0%} |
-| Mean CRPS (lower is better) | {a['crps']:.1f} | {b['crps']:.1f} |
-| Naive forecast error, EUR/MWh | {a['naive']:.1f} | {b['naive']:.1f} |
-"""
+    if len(others) > 1:
+        ms = {v: metrics(b) for v, b in others.items()}
+        cols = list(ms)
+        head = "| | " + " | ".join(NAMES[v] + (" (this report)" if v == version else "") for v in cols) + " |"
+        sep = "|---|" + "---|" * len(cols)
+        def row(label, f):
+            return f"| {label} | " + " | ".join(f(ms[v]) for v in cols) + " |"
+        summer_bias = {}
+        for v, b in others.items():
+            mo = b["target"].str[4:].astype(int)
+            e = b["mean"] - b["actual"]
+            summer_bias[v] = e[(mo >= 6) & (mo <= 10)].mean()
+        compare = "\n### All versions on the same months\n\n" + "\n".join([
+            head, sep,
+            row("Mean absolute error, EUR/MWh", lambda m: f"{m['mae']:.1f}"),
+            row("Mean error (bias), EUR/MWh", lambda m: f"{m['bias']:+.1f}"),
+            "| Bias June to October, EUR/MWh | " + " | ".join(f"{summer_bias[v]:+.1f}" for v in cols) + " |",
+            row("50% interval coverage", lambda m: f"{m['in50']:.0%}"),
+            row("90% interval coverage", lambda m: f"{m['in90']:.0%}"),
+            row("Mean CRPS (lower is better)", lambda m: f"{m['crps']:.1f}"),
+        ]) + f"\n\nNaive forecast (last 30 days) error: {metrics(bt)['naive']:.1f} EUR/MWh.\n"
     m = metrics(bt)
     gain = 1 - m["mae"] / m["naive"]
     cover = ("Its intervals are too wide rather than too narrow (90% intervals caught "
@@ -169,14 +201,20 @@ def main():
     month_of = bt.index.str[4:].astype(int)
     err = bt["mean"] - bt["actual"]
     summer, rest = err[(month_of >= 6) & (month_of <= 10)].mean(), err[(month_of < 6) | (month_of > 10)].mean()
-    season = (f" The lean is seasonal: {summer:+.1f} EUR/MWh from June to October against {rest:+.1f} in the other "
-              "months. In summer, solar pushes gas out of the price-setting position for many hours, and the model "
-              "has no seasonal term to expect that." if summer - rest > 5 else "")
+    if version in ("v1", "v2") and summer - rest > 5:
+        season = (f" The lean is seasonal: {summer:+.1f} EUR/MWh from June to October against {rest:+.1f} in the "
+                  "other months. Its residual-load scenarios come from past years, which had less solar, so they "
+                  "overstate summer residual load; version 3 fixes this.")
+    elif abs(summer - rest) > 5:
+        season = (f" The errors differ by season: {summer:+.1f} EUR/MWh from June to October against {rest:+.1f} in "
+                  "the other months.")
+    else:
+        season = ""
     findings = (f"The model {'beats' if gain > 0 else 'trails'} the naive forecast by {abs(gain):.0%} on absolute error. "
                 f"{cover} {lean}{season}")
-    md = f"""# German base month model, version {version[1]}
+    md = f"""# German base month model: {NAMES[version]}
 
-Generated by `python -m models.{"de_base_month_v2" if version == "v2" else "de_base_month"} --backtest {n}` and `python -m models.report_de_base_month --model {version}`.
+Generated by `{ {"v1": "python -m models.de_base_month", "v2": "python -m models.de_base_month_v2"}.get(version, "python -m models.de_base_month_v3 --variant " + version[3:]) } --backtest {n}` and `python -m models.report_de_base_month --model {version}`.
 Data through {params['origin']}; EEX futures as of {fc['futures_trade_date'].iloc[0]}.
 
 ## What the model does

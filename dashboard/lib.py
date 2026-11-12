@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 
 from pipeline.build_db import DB, rebuild  # noqa: E402
 
-REPORTS = ROOT / "reports" / "de_base_month_v2"      # current model
+REPORTS = ROOT / "reports" / "de_base_month_v3_solar"  # current model
 REPORTS_V1 = ROOT / "reports" / "de_base_month"
 
 # ---------------------------------------------------------------- palette

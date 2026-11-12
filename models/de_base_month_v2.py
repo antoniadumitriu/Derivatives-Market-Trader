@@ -65,7 +65,8 @@ def con():
 
 
 def load_daily() -> pd.DataFrame:
-    df = con().execute("""SELECT day, base_price, residual_load_gw, is_weekend, gas_srmc_eur_mwh AS cost
+    df = con().execute("""SELECT day, base_price, residual_load_gw, load_gw, wind_gw, solar_gw, is_weekend,
+                                 gas_srmc_eur_mwh AS cost
                           FROM de_daily
                           WHERE gen_hours >= 23 AND residual_load_gw IS NOT NULL AND gas_srmc_eur_mwh IS NOT NULL
                           ORDER BY day""").df()
@@ -79,6 +80,16 @@ def load_fuel() -> pd.DataFrame:
     return f.set_index("day")
 
 
+def load_capacity() -> pd.DataFrame:
+    """German installed wind (onshore + offshore) and solar capacity by month, GW."""
+    c = con().execute("""
+        SELECT period AS month,
+               sum(capacity_gw) FILTER (WHERE technology IN ('wind_onshore', 'wind_offshore')) AS wind,
+               sum(capacity_gw) FILTER (WHERE technology = 'solar_ac') AS solar
+        FROM installed_capacity WHERE country = 'de' AND time_step = 'monthly' GROUP BY 1 ORDER BY 1""").df()
+    return c.set_index("month")
+
+
 def load_curve() -> pd.DataFrame:
     c = con().execute("SELECT CAST(trade_date AS DATE) AS trade_date, CAST(delivery_month AS VARCHAR) AS month, close FROM ttf_curve").df()
     c["trade_date"] = pd.to_datetime(c["trade_date"])
@@ -87,7 +98,7 @@ def load_curve() -> pd.DataFrame:
 
 # ---------------------------------------------------------------- model
 
-def model(week, z, weekend, cost, n_weeks, y=None):
+def model(week, z, weekend, cost, n_weeks, month=None, y=None):
     m0 = numpyro.sample("m0", dist.Normal(1.0, 0.5))
     s0 = numpyro.sample("s0", dist.Normal(0.2, 0.2))
     logsig0 = numpyro.sample("logsig0", dist.Normal(jnp.log(15.0), 1.0))
@@ -111,14 +122,25 @@ def model(week, z, weekend, cost, n_weeks, y=None):
     s = numpyro.deterministic("s", walk(s0, tau_s, e_s))
     logsig = numpyro.deterministic("logsig", walk(logsig0, tau_logsig, e_logsig))
 
-    mu = SCALE * cost * (m[week] + s[week] * z) + gamma * weekend
+    mult = m[week]
+    if month is not None:
+        # Version 3: a shift in the multiple for each calendar month, centred so the 12 shifts
+        # average to zero and the random walk keeps the underlying level.
+        raw = numpyro.sample("season_raw", dist.Normal(0.0, 0.2).expand([12]))
+        season = numpyro.deterministic("season", raw - raw.mean())
+        mult = mult + season[month]
+    mu = SCALE * cost * (mult + s[week] * z) + gamma * weekend
     scale = jnp.exp(logsig[week]) * cost ** phi
     with numpyro.plate("days", len(z)):
         numpyro.sample("y", dist.StudentT(nu, mu, scale), obs=y)
 
 
 class Fit:
-    def __init__(self, daily, origin, samples=500, warmup=500, chains=2, seed=0):
+    def __init__(self, daily, origin, samples=500, warmup=500, chains=2, seed=0, seasonal=False, capacity=None):
+        self.seasonal = seasonal
+        # capacity: monthly installed wind/solar (load_capacity()). When given, residual-load
+        # scenarios rescale past years' solar output to the solar capacity at the origin.
+        self.capacity = capacity
         d = daily[daily["day"] <= origin].copy()
         self.origin, self.day0, self.history = origin, d["day"].min(), d
         self.z_mean, self.z_sd = d["residual_load_gw"].mean(), d["residual_load_gw"].std()
@@ -128,12 +150,14 @@ class Fit:
         # Start every chain from plausible values: random starts on the scale parameters can
         # leave a chain stuck in a region where the random walks explode.
         init = init_to_value(values={"m0": 1.0, "s0": 0.2, "logsig0": float(np.log(15.0)), "tau_m": 0.03,
-                                     "tau_s": 0.02, "tau_logsig": 0.1, "phi": 0.5, "gamma": 0.0, "nu_raw": 3.0})
+                                     "tau_s": 0.02, "tau_logsig": 0.1, "phi": 0.5, "gamma": 0.0, "nu_raw": 3.0,
+                                     **({"season_raw": np.zeros(12)} if seasonal else {})})
         mcmc = MCMC(NUTS(model, target_accept_prob=0.9, init_strategy=init), num_warmup=warmup, num_samples=samples,
                     num_chains=chains, progress_bar=False)
         mcmc.run(jax.random.PRNGKey(seed), week=jnp.array(week), z=jnp.array(self.zscore(d["residual_load_gw"])),
                  weekend=jnp.array(d["is_weekend"].astype(float).to_numpy()),
                  cost=jnp.array(d["cost"].to_numpy() / SCALE), n_weeks=self.n_weeks,
+                 month=jnp.array(d["day"].dt.month.to_numpy() - 1) if seasonal else None,
                  y=jnp.array(d["base_price"].to_numpy()))
         self.seconds = time.time() - t0
         self.post = {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
@@ -147,8 +171,20 @@ class Fit:
         y, m = int(month[:4]), int(month[4:])
         n = calendar.monthrange(y, m)[1]
         h, paths = self.history, []
+        cap = self.capacity
+        if cap is not None:
+            now = cap.loc[:self.origin.strftime("%Y-%m")].iloc[-1]
         for year in sorted(h["day"].dt.year.unique(), reverse=True):
-            part = h[(h["day"].dt.year == year) & (h["day"].dt.month == m)]["residual_load_gw"].to_numpy()
+            rows = h[(h["day"].dt.year == year) & (h["day"].dt.month == m)]
+            if cap is not None and f"{year}-{m:02d}" in cap.index:
+                then = cap.loc[f"{year}-{m:02d}"]
+                # Same weather, today's solar fleet: solar output scales with installed capacity.
+                # Wind is left as it was: in backtests, scaling it too overstated winter wind
+                # (new wind capacity does not add output one-for-one, e.g. curtailment).
+                part = (rows["load_gw"] - rows["wind_gw"]
+                        - rows["solar_gw"] * now["solar"] / then["solar"]).to_numpy()
+            else:
+                part = rows["residual_load_gw"].to_numpy()
             if len(part) >= 28 and year < y:
                 paths.append(np.resize(part, n))
             if len(paths) == CLIMATE_YEARS:
@@ -170,6 +206,8 @@ class Fit:
             return x_last[:, None] + np.cumsum(tau[:, None] * rng.standard_normal((S, H)), axis=1)
 
         m = carry(p["m"][:, last], p["tau_m"])[:, steps - 1]
+        if self.seasonal:
+            m = m + p["season"][:, mo - 1][:, None]
         s = carry(p["s"][:, last], p["tau_s"])[:, steps - 1]
         sig = np.exp(carry(p["logsig"][:, last], p["tau_logsig"])[:, steps - 1])
         # Gas price during delivery: forward with lognormal uncertainty up to mid-delivery.
@@ -210,9 +248,9 @@ def forward_at(fuel, curve, origin, month, backtest=False):
 
 # ---------------------------------------------------------------- runs
 
-def run_forecast(daily, fuel, curve):
+def run_forecast(daily, fuel, curve, seasonal=False, out=OUT, capacity=None):
     origin = daily["day"].max()
-    fit = Fit(daily, origin, samples=1000, warmup=1000)
+    fit = Fit(daily, origin, samples=1000, warmup=1000, seasonal=seasonal, capacity=capacity)
     print(f"Fit through {origin.date()}: {fit.n_weeks} weeks, {fit.seconds:.0f}s, {fit.divergences} divergences")
     fut = con().execute("SELECT trade_date, month, settlement FROM de_base_month_futures").df()
     last_trade = fut["trade_date"].max()
@@ -232,21 +270,24 @@ def run_forecast(daily, fuel, curve):
                   "gas_plant_cost": float(srmc(fwd, eua))})
         rows.append(s)
     res = pd.DataFrame(rows).set_index("month")
-    res.to_csv(OUT / "forecast.csv")
+    res.to_csv(out / "forecast.csv")
     p = fit.post
     params = {k: summary(p[k]) for k in ("tau_m", "tau_s", "tau_logsig", "phi", "gamma", "nu")}
     params["m_last_week"] = summary(p["m"][:, -1])
     params["s_last_week"] = summary(p["s"][:, -1])
-    (OUT / "params.json").write_text(json.dumps({"origin": str(origin.date()), "weeks": fit.n_weeks,
+    if seasonal:
+        for i, name in enumerate(calendar.month_abbr[1:]):
+            params[f"season_{name.lower()}"] = summary(p["season"][:, i])
+    (out / "params.json").write_text(json.dumps({"origin": str(origin.date()), "weeks": fit.n_weeks,
                                                  "divergences": fit.divergences, "seconds": round(fit.seconds),
                                                  "params": params}, indent=2, default=float))
     pd.DataFrame({"week_start": fit.day0 + pd.to_timedelta(np.arange(fit.n_weeks) * 7, "D"),
                   "m_mean": p["m"].mean(0), "s_mean": p["s"].mean(0),
-                  "sigma_mean": np.exp(p["logsig"]).mean(0)}).to_csv(OUT / "states.csv", index=False)
+                  "sigma_mean": np.exp(p["logsig"]).mean(0)}).to_csv(out / "states.csv", index=False)
     print(res[["mean", "p05", "p95", "futures", "p_futures_above_model", "ttf_forward", "ttf_source"]].round(2).to_string())
 
 
-def run_backtest(daily, fuel, months_back):
+def run_backtest(daily, fuel, months_back, seasonal=False, out=OUT, capacity=None):
     index = con().execute("SELECT month, base_index, complete FROM de_month_index").df().set_index("month")
     targets = index[index["complete"]].index.tolist()[-months_back:]
     rows = []
@@ -254,7 +295,7 @@ def run_backtest(daily, fuel, months_back):
         prev = next_month(target, -1)
         py, pm = int(prev[:4]), int(prev[4:])
         origin = pd.Timestamp(dt.date(py, pm, calendar.monthrange(py, pm)[1]))
-        fit = Fit(daily, origin, samples=400, warmup=400)
+        fit = Fit(daily, origin, samples=400, warmup=400, seasonal=seasonal, capacity=capacity)
         fwd, src = forward_at(fuel, None, origin, target, backtest=True)
         eua = float(fuel.loc[:origin, "eua"].dropna().iloc[-1])
         draws = fit.forecast_month(target, fwd, eua, gas_vol_at(fuel, origin))
@@ -270,24 +311,25 @@ def run_backtest(daily, fuel, months_back):
         print(f"{target}: actual {actual:6.1f}  model {s['mean']:6.1f} [{s['p05']:6.1f}, {s['p95']:6.1f}]  "
               f"naive {naive:6.1f}  pit {s['pit']:.2f}  ({fit.seconds:.0f}s, {fit.divergences} div)", flush=True)
     bt = pd.DataFrame(rows).set_index("target")
-    bt.to_csv(OUT / "backtest.csv")
+    bt.to_csv(out / "backtest.csv")
     print(f"MAE model {bt.abs_err_mean.mean():.1f}, naive {bt.abs_err_naive.mean():.1f}; "
           f"50% coverage {bt.in_50.mean():.0%}, 90% coverage {bt.in_90.mean():.0%}; CRPS {bt.crps.mean():.1f}; "
           f"bias {(bt['mean'] - bt.actual).mean():+.1f}")
 
 
-def main():
+def main(seasonal=False, out=OUT, capacity_adjusted=False):
     ap = argparse.ArgumentParser()
     ap.add_argument("--backtest", type=int, default=0)
     ap.add_argument("--no-forecast", action="store_true")
     args = ap.parse_args()
-    OUT.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     rebuild()
     daily, fuel, curve = load_daily(), load_fuel(), load_curve()
+    cap = load_capacity() if capacity_adjusted else None
     if not args.no_forecast:
-        run_forecast(daily, fuel, curve)
+        run_forecast(daily, fuel, curve, seasonal, out, cap)
     if args.backtest:
-        run_backtest(daily, fuel, args.backtest)
+        run_backtest(daily, fuel, args.backtest, seasonal, out, cap)
 
 
 if __name__ == "__main__":

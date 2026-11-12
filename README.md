@@ -19,7 +19,7 @@ Opens at http://localhost:8501. Pages:
 | Gas and carbon | TTF gas, EUA carbon, the cost of gas-fired power against the German power price, and the TTF forward curve |
 | Fundamentals | Generation mix and load, price vs. residual load (the merit order), wind and solar forecast vs. actual, cross-border flows and installed capacity, per country |
 | Weather | Actuals and the latest 16-day forecast at the tracked points, and German temperature vs. normal |
-| German base month | The Bayesian model (version 2, or version 1 for comparison): forecasts vs. EEX futures, the 24-month backtest, and the weekly states it estimates. A sidebar button refits it on the latest data |
+| German base month | The Bayesian model (version 3, or earlier versions for comparison): forecasts vs. EEX futures, the 24-month backtest, and the weekly states it estimates. A sidebar button refits it on the latest data |
 
 Every chart has hover values and a table view. The dashboard reads `data/warehouse.duckdb`, which it rebuilds from the CSVs on start and whenever they change (for example after `git pull`).
 
@@ -39,10 +39,12 @@ data/
   weather/               actuals/, forecasts/ (one CSV per month), points.csv, runs.csv
 dashboard/                Streamlit dashboard (app.py, views/, lib.py)
 pipeline/build_db.py     loads all CSVs into data/warehouse.duckdb (local, not committed)
-models/de_base_month_v2.py  Bayesian model of the German base month index, anchored on gas and carbon costs (current)
+models/de_base_month_v3.py  current model: v2 with today's solar fleet in the residual-load scenarios
+                            (and a calendar-month variant for comparison)
+models/de_base_month_v2.py  Bayesian model anchored on gas and carbon costs (the code v3 builds on)
 models/de_base_month.py     version 1, price level only (kept for comparison)
-reports/de_base_month_v2/   latest v2 fit, backtest, comparison with v1 and with EEX futures
-reports/de_base_month/      the same for v1
+reports/de_base_month_v3_solar/  latest fit, backtest, comparison with all versions and with EEX futures
+reports/de_base_month_*/         the same for the other versions
 .github/workflows/
   eex-daily.yml          weekdays 19:37 UTC
   fundamentals-daily.yml every day 13:17 UTC (Energy-Charts, Open-Meteo, Yahoo Finance)
@@ -84,15 +86,23 @@ python -m connectors.open_meteo.fetch     [--start 2021-01-01] [--datasets actua
 
 ```
 python -m pipeline.build_db                       # build the DuckDB warehouse
-python -m models.de_base_month_v2 --backtest 24   # fit, forecast the next 3 months, backtest 24 months (~50 min)
-python -m models.report_de_base_month             # write reports/de_base_month_v2/README.md and charts
-python -m models.de_base_month --backtest 24      # version 1, then: python -m models.report_de_base_month --model v1
+python -m models.de_base_month_v3 --variant solar --backtest 24   # fit, forecast 3 months, backtest 24 (~50 min)
+python -m models.report_de_base_month --model v3_solar             # write the report and charts
+# other versions: models.de_base_month_v2, models.de_base_month, models.de_base_month_v3 --variant seasonal|both
 ```
 
 The warehouse has raw views over every dataset plus three modeling tables: `de_daily` (one row per German
 delivery day with base and peak prices and fundamentals), `de_month_index` (realised monthly base index) and
 `de_base_month_futures` (EEX German base month futures by trade date), plus `fuel_daily` (TTF gas, EUA carbon and
-the cost of gas-fired power). Results of the latest run are in [reports/de_base_month_v2](reports/de_base_month_v2/README.md).
+the cost of gas-fired power). Results of the latest run are in [reports/de_base_month_v3_solar](reports/de_base_month_v3_solar/README.md).
+
+| 24-month backtest | v1 | v2 | v3 (solar) | v2 + calendar month |
+|---|---|---|---|---|
+| Mean absolute error, EUR/MWh | 11.6 | 10.7 | **9.2** | 9.7 |
+| Bias, EUR/MWh | +4.5 | +4.6 | -2.7 | +4.6 |
+| Bias June to October | +12.7 | +12.6 | +2.2 | +9.1 |
+| 50% / 90% interval coverage | 58% / 100% | 54% / 88% | 50% / 88% | 58% / 96% |
+| CRPS | 8.3 | 7.8 | **6.8** | 7.2 |
 
 ## Sources and terms
 
