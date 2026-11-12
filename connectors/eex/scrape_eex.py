@@ -49,6 +49,13 @@ def in_scope(c: dict) -> bool:
         )
     if c["commodity"] == "ENVIRONMENTALS":
         return c["product"] in ("EUA", "UKA", "ETS2")
+    if c["commodity"] == "NATGAS":
+        # Dutch (TTF) and German (THE) gas hubs, physically settled, standard contract size.
+        return (
+            c["area"] in ("TTF", "THE")
+            and c["product"] == "Physical"
+            and c["maturityType"] in ("Month", "Quarter", "Season", "Year")
+        )
     return False
 
 
