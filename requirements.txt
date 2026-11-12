@@ -2,3 +2,8 @@ playwright==1.48.0
 pandas>=2.2
 lxml>=5.0
 requests>=2.31
+# modeling
+duckdb>=1.1
+numpyro>=0.15
+jax>=0.4
+matplotlib>=3.8

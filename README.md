@@ -15,6 +15,9 @@ data/
   energy_charts/         prices/, generation/, forecasts/, crossborder/ (one CSV per UTC month),
                          installed_capacity.csv, runs.csv
   weather/               actuals/, forecasts/ (one CSV per month), points.csv, runs.csv
+pipeline/build_db.py     loads all CSVs into data/warehouse.duckdb (local, not committed)
+models/de_base_month.py  Bayesian model of the German base month index (NumPyro)
+reports/de_base_month/   latest model fit, backtest and comparison with EEX futures
 .github/workflows/
   eex-daily.yml          weekdays 19:37 UTC
   fundamentals-daily.yml every day 13:17 UTC (Energy-Charts and Open-Meteo)
@@ -48,6 +51,19 @@ python -m connectors.eex.scrape_eex
 python -m connectors.energy_charts.fetch  [--start 2021-01-01] [--datasets prices,generation]
 python -m connectors.open_meteo.fetch     [--start 2021-01-01] [--datasets actuals]
 ```
+
+## Modeling
+
+```
+python -m pipeline.build_db                       # build the DuckDB warehouse
+python -m models.de_base_month --backtest 24      # fit, forecast the next 3 months, backtest 24 months
+python -m models.report_de_base_month             # write reports/de_base_month/README.md and charts
+```
+
+The warehouse has raw views over every dataset plus three modeling tables: `de_daily` (one row per German
+delivery day with base and peak prices and fundamentals), `de_month_index` (realised monthly base index) and
+`de_base_month_futures` (EEX German base month futures by trade date). Results of the latest run are in
+[reports/de_base_month](reports/de_base_month/README.md).
 
 ## Sources and terms
 
