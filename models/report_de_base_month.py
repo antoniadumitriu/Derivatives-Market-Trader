@@ -50,19 +50,18 @@ def intervals(ax, x, df, observed, observed_label):
 
 
 OUTS = {"v1": OUT_V1, "v2": OUT_V2, "v3_solar": v3_out("solar"), "v3_seasonal": v3_out("seasonal"),
-        "v3_both": v3_out("both")}
+        "v3_both": v3_out("both")}  # v3_both is the current model
 NAMES = {"v1": "Version 1: price level only", "v2": "Version 2: gas and carbon",
-         "v3_solar": "Version 3: v2 + today's solar fleet in scenarios",
-         "v3_seasonal": "Variant: v2 + calendar-month term", "v3_both": "Variant: v2 + both"}
-V3_SOLAR = """Version 3 is version 2 with one change in how a delivery month's residual load is simulated. Version 2
+         "v3_both": "Version 3: v2 + today's solar fleet + calendar month",
+         "v3_solar": "Variant: v2 + today's solar fleet", "v3_seasonal": "Variant: v2 + calendar-month term"}
+V3_SOLAR = """This changes how a delivery month's residual load is simulated. Version 2
 took past years' residual load as it was, but solar capacity keeps growing, so past summers had more residual load
 than this summer will. Version 3 takes past years' weather with **today's solar fleet**: each past year's solar
 output is scaled by installed solar capacity now versus then (wind is left as it was; scaling it too overstated
 winter wind). Over 2024 to 2026 this cut the average error in assumed residual load from 4.2 to 2.8 GW, and in
 summer the bias from +4.8 to +1.5 GW."""
-V3_SEASONAL = """This variant adds a shift in the price/cost multiple for each calendar month to version 2 (12 shifts,
-centred to average zero), to test whether the summer over-forecast was a seasonal pattern in how far power trades
-below the gas-plant cost."""
+V3_SEASONAL = """It also adds a shift in the price/cost multiple for each calendar month (12 shifts, centred to
+average zero), for seasonal patterns in how far power trades below the gas-plant cost."""
 DESCRIPTION = {
     "v1": """It models the daily German day-ahead base price as a weekly-varying **price level**, plus a weekly-varying
 **merit-order slope** times standardised residual load (load minus wind and solar), plus a weekend effect,
@@ -113,7 +112,7 @@ def metrics(bt):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", choices=list(OUTS), default="v3_solar")
+    ap.add_argument("--model", choices=list(OUTS), default="v3_both")
     version = ap.parse_args().model
     OUT = OUTS[version]
     bt = pd.read_csv(OUT / "backtest.csv", dtype={"target": str}).set_index("target")

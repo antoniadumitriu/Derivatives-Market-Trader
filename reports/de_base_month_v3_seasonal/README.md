@@ -17,9 +17,8 @@ gas-price uncertainty that grows with time to delivery (volatility from the last
 load drawn from the same calendar month of the last 3 years. In the backtest, where old TTF contract prices are
 not available, the TTF front month at the forecast date stands in for the delivery month's gas price.
 
-This variant adds a shift in the price/cost multiple for each calendar month to version 2 (12 shifts,
-centred to average zero), to test whether the summer over-forecast was a seasonal pattern in how far power trades
-below the gas-plant cost.
+It also adds a shift in the price/cost multiple for each calendar month (12 shifts, centred to
+average zero), for seasonal patterns in how far power trades below the gas-plant cost.
 
 ## Fit
 
@@ -61,14 +60,14 @@ Refit at each month end, forecast the next month's base index.
 
 ### All versions on the same months
 
-| | Version 1: price level only | Version 2: gas and carbon | Version 3: v2 + today's solar fleet in scenarios | Variant: v2 + calendar-month term (this report) |
-|---|---|---|---|---|
-| Mean absolute error, EUR/MWh | 11.6 | 10.7 | 9.2 | 9.7 |
-| Mean error (bias), EUR/MWh | +4.5 | +4.6 | -2.7 | +4.6 |
-| Bias June to October, EUR/MWh | +12.7 | +12.6 | +2.2 | +9.1 |
-| 50% interval coverage | 58% | 54% | 50% | 58% |
-| 90% interval coverage | 100% | 88% | 88% | 96% |
-| Mean CRPS (lower is better) | 8.3 | 7.8 | 6.8 | 7.2 |
+| | Version 1: price level only | Version 2: gas and carbon | Variant: v2 + today's solar fleet | Variant: v2 + calendar-month term (this report) | Version 3: v2 + today's solar fleet + calendar month |
+|---|---|---|---|---|---|
+| Mean absolute error, EUR/MWh | 11.6 | 10.7 | 9.2 | 9.7 | 9.1 |
+| Mean error (bias), EUR/MWh | +4.5 | +4.6 | -2.7 | +4.6 | -2.6 |
+| Bias June to October, EUR/MWh | +12.7 | +12.6 | +2.2 | +9.1 | -1.3 |
+| 50% interval coverage | 58% | 54% | 50% | 58% | 58% |
+| 90% interval coverage | 100% | 88% | 88% | 96% | 92% |
+| Mean CRPS (lower is better) | 8.3 | 7.8 | 6.8 | 7.2 | 6.6 |
 
 Naive forecast (last 30 days) error: 14.0 EUR/MWh.
 

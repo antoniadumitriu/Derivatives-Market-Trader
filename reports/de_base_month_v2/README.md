@@ -45,14 +45,14 @@ Refit at each month end, forecast the next month's base index.
 
 ### All versions on the same months
 
-| | Version 1: price level only | Version 2: gas and carbon (this report) | Version 3: v2 + today's solar fleet in scenarios | Variant: v2 + calendar-month term |
-|---|---|---|---|---|
-| Mean absolute error, EUR/MWh | 11.6 | 10.7 | 9.2 | 9.7 |
-| Mean error (bias), EUR/MWh | +4.5 | +4.6 | -2.7 | +4.6 |
-| Bias June to October, EUR/MWh | +12.7 | +12.6 | +2.2 | +9.1 |
-| 50% interval coverage | 58% | 54% | 50% | 58% |
-| 90% interval coverage | 100% | 88% | 88% | 96% |
-| Mean CRPS (lower is better) | 8.3 | 7.8 | 6.8 | 7.2 |
+| | Version 1: price level only | Version 2: gas and carbon (this report) | Variant: v2 + today's solar fleet | Variant: v2 + calendar-month term | Version 3: v2 + today's solar fleet + calendar month |
+|---|---|---|---|---|---|
+| Mean absolute error, EUR/MWh | 11.6 | 10.7 | 9.2 | 9.7 | 9.1 |
+| Mean error (bias), EUR/MWh | +4.5 | +4.6 | -2.7 | +4.6 | -2.6 |
+| Bias June to October, EUR/MWh | +12.7 | +12.6 | +2.2 | +9.1 | -1.3 |
+| 50% interval coverage | 58% | 54% | 50% | 58% | 58% |
+| 90% interval coverage | 100% | 88% | 88% | 96% | 92% |
+| Mean CRPS (lower is better) | 8.3 | 7.8 | 6.8 | 7.2 | 6.6 |
 
 Naive forecast (last 30 days) error: 14.0 EUR/MWh.
 

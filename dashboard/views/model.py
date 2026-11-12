@@ -15,12 +15,14 @@ rebuild_button()
 R = ROOT / "reports"
 # label: (version id, report folder, refit command)
 ALL_VERSIONS = {
-    "Version 3: gas, carbon, today's solar": ("v3_solar", R / "de_base_month_v3_solar",
-                                              ["models.de_base_month_v3", "--variant", "solar"]),
+    "Version 3: today's solar + calendar month": ("v3_both", R / "de_base_month_v3_both",
+                                                  ["models.de_base_month_v3", "--variant", "both"]),
     "Version 2: gas and carbon": ("v2", R / "de_base_month_v2", ["models.de_base_month_v2"]),
     "Version 1: price level only": ("v1", R / "de_base_month", ["models.de_base_month"]),
-    "Variant: v2 + calendar-month term": ("v3_seasonal", R / "de_base_month_v3_seasonal",
-                                          ["models.de_base_month_v3", "--variant", "seasonal"]),
+    "Variant: v2 + today's solar": ("v3_solar", R / "de_base_month_v3_solar",
+                                    ["models.de_base_month_v3", "--variant", "solar"]),
+    "Variant: v2 + calendar month": ("v3_seasonal", R / "de_base_month_v3_seasonal",
+                                     ["models.de_base_month_v3", "--variant", "seasonal"]),
 }
 VERSIONS = {k: v for k, v in ALL_VERSIONS.items() if (v[1] / "forecast.csv").exists()}
 choice = st.segmented_control("Model", list(VERSIONS), default=list(VERSIONS)[0])
@@ -137,7 +139,7 @@ if bt is not None:
 # ---------------------------------------------------------------- latent states
 st.subheader("What the model sees: weekly states")
 STATES = {
-    "v3_solar": None, "v3_seasonal": None,
+    "v3_solar": None, "v3_seasonal": None, "v3_both": None,
     "v1": (("level_mean", "Price level, €/MWh"), ("beta_mean", "Merit-order slope, €/MWh per s.d. of residual load"),
            ("sigma_mean", "Daily noise scale, €/MWh")),
     "v2": (("m_mean", "Price as a multiple of gas plant cost"), ("s_mean", "Slope: change in the multiple per s.d. of residual load"),
@@ -152,7 +154,7 @@ for i, (col, name) in enumerate(STATES, 1):
                              hovertemplate="%{y:.2f}<extra></extra>"), row=i, col=1)
 fig.update_annotations(font=dict(size=12, color=INK2), x=0, xanchor="left")
 show(fig_defaults(fig, "", "", 620), states.round(3), key="states")
-st.caption({"v3_solar": None, "v3_seasonal": None, "v1": "Posterior means. The level stands in for fuel and carbon costs; the slope is how much prices react "
+st.caption({"v3_solar": None, "v3_seasonal": None, "v3_both": None, "v1": "Posterior means. The level stands in for fuel and carbon costs; the slope is how much prices react "
                   "to residual load, which is steep when gas sets the price.",
             "v2": "Posterior means. A multiple near 1 means the power price sits at the cost of gas-fired power; "
                   "lower means cheaper plants (renewables, coal, imports) set the price more often."}[version]

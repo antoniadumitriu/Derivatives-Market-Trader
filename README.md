@@ -40,10 +40,10 @@ data/
 dashboard/                Streamlit dashboard (app.py, views/, lib.py)
 pipeline/build_db.py     loads all CSVs into data/warehouse.duckdb (local, not committed)
 models/de_base_month_v3.py  current model: v2 with today's solar fleet in the residual-load scenarios
-                            (and a calendar-month variant for comparison)
+                            and a calendar-month term (each fix also available alone as a variant)
 models/de_base_month_v2.py  Bayesian model anchored on gas and carbon costs (the code v3 builds on)
 models/de_base_month.py     version 1, price level only (kept for comparison)
-reports/de_base_month_v3_solar/  latest fit, backtest, comparison with all versions and with EEX futures
+reports/de_base_month_v3_both/   latest fit, backtest, comparison with all versions and with EEX futures
 reports/de_base_month_*/         the same for the other versions
 .github/workflows/
   eex-daily.yml          weekdays 19:37 UTC
@@ -86,23 +86,23 @@ python -m connectors.open_meteo.fetch     [--start 2021-01-01] [--datasets actua
 
 ```
 python -m pipeline.build_db                       # build the DuckDB warehouse
-python -m models.de_base_month_v3 --variant solar --backtest 24   # fit, forecast 3 months, backtest 24 (~50 min)
-python -m models.report_de_base_month --model v3_solar             # write the report and charts
-# other versions: models.de_base_month_v2, models.de_base_month, models.de_base_month_v3 --variant seasonal|both
+python -m models.de_base_month_v3 --backtest 24     # current model: fit, forecast 3 months, backtest 24 (~50 min)
+python -m models.report_de_base_month               # write the report and charts
+# other versions: models.de_base_month_v2, models.de_base_month, models.de_base_month_v3 --variant solar|seasonal
 ```
 
 The warehouse has raw views over every dataset plus three modeling tables: `de_daily` (one row per German
 delivery day with base and peak prices and fundamentals), `de_month_index` (realised monthly base index) and
 `de_base_month_futures` (EEX German base month futures by trade date), plus `fuel_daily` (TTF gas, EUA carbon and
-the cost of gas-fired power). Results of the latest run are in [reports/de_base_month_v3_solar](reports/de_base_month_v3_solar/README.md).
+the cost of gas-fired power). Results of the latest run are in [reports/de_base_month_v3_both](reports/de_base_month_v3_both/README.md).
 
-| 24-month backtest | v1 | v2 | v3 (solar) | v2 + calendar month |
-|---|---|---|---|---|
-| Mean absolute error, EUR/MWh | 11.6 | 10.7 | **9.2** | 9.7 |
-| Bias, EUR/MWh | +4.5 | +4.6 | -2.7 | +4.6 |
-| Bias June to October | +12.7 | +12.6 | +2.2 | +9.1 |
-| 50% / 90% interval coverage | 58% / 100% | 54% / 88% | 50% / 88% | 58% / 96% |
-| CRPS | 8.3 | 7.8 | **6.8** | 7.2 |
+| 24-month backtest | v1 | v2 | v2 + today's solar | v2 + calendar month | **v3 (both)** |
+|---|---|---|---|---|---|
+| Mean absolute error, EUR/MWh | 11.6 | 10.7 | 9.2 | 9.7 | **9.1** |
+| Bias, EUR/MWh | +4.5 | +4.6 | -2.7 | +4.6 | -2.6 |
+| Bias June to October | +12.7 | +12.6 | +2.2 | +9.1 | -1.3 |
+| 50% / 90% interval coverage | 58% / 100% | 54% / 88% | 50% / 88% | 58% / 96% | 58% / 92% |
+| CRPS | 8.3 | 7.8 | 6.8 | 7.2 | **6.6** |
 
 ## Sources and terms
 
