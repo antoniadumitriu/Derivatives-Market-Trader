@@ -1,5 +1,7 @@
 """Shared helpers for the dashboard: warehouse connection, chart styling, small widgets."""
 
+from __future__ import annotations
+
 import datetime as dt
 import pathlib
 import sys
@@ -102,7 +104,7 @@ def fig_defaults(fig: go.Figure, title: str, ytitle: str = "", height: int = 420
 
 
 def show(fig: go.Figure, table: pd.DataFrame | None = None, key: str | None = None):
-    st.plotly_chart(fig, width="stretch", key=key)
+    st.plotly_chart(fig, key=key)  # fills the container by default
     if table is not None:
         with st.expander("Table view"):
             st.dataframe(table, width="stretch", hide_index=True)
