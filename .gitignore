@@ -1,5 +1,5 @@
 debug/
 __pycache__/
 .venv/
-data/warehouse.duckdb*
+data/warehouse*.duckdb*
 reports/**/*.npy

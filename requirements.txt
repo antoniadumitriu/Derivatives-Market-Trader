@@ -7,3 +7,6 @@ duckdb>=1.1
 numpyro>=0.15
 jax>=0.4
 matplotlib>=3.8
+# dashboard
+streamlit>=1.50
+plotly>=6.0

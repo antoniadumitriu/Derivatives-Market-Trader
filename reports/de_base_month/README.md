@@ -17,7 +17,7 @@ It does not yet see gas or carbon prices. The weekly level stands in for them, s
 
 ## Fit
 
-306 weeks of data, 9 s of sampling, 0 divergences, R-hat at most 1.03.
+306 weeks of data, 8 s of sampling, 0 divergences, R-hat at most 1.03.
 
 | Parameter | Posterior mean | 90% interval |
 |---|---|---|
