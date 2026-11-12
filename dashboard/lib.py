@@ -59,7 +59,12 @@ def page(title: str, caption: str | None = None):
 def _connection(stamp: float) -> duckdb.DuckDBPyConnection:
     if not DB.exists() or DB.stat().st_mtime < stamp:
         rebuild()
-    return duckdb.connect(str(DB), read_only=True)
+    try:
+        return duckdb.connect(str(DB), read_only=True)
+    except duckdb.IOException:
+        # Usually a warehouse written by a different DuckDB version: rebuild it with this one.
+        rebuild()
+        return duckdb.connect(str(DB), read_only=True)
 
 
 
