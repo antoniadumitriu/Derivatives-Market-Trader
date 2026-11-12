@@ -11,9 +11,10 @@ Daily tables (delivery day in Europe/Berlin), for the dashboard:
   prices_daily, generation_daily, crossborder_daily, power_forecasts_daily, weather_daily
 
 Modeling tables (rebuilt each time):
+  fuel_daily      TTF gas, EUA carbon and the marginal cost of a gas-fired plant, per day
   de_daily        one row per German delivery day (Europe/Berlin): day-ahead base
                   and peak price, load, residual load, wind, solar, net imports,
-                  population-weighted-ish temperature, calendar flags
+                  temperature, gas, carbon and gas-plant cost of the day before, calendar flags
   de_month_index  realised monthly base average of the day-ahead price, i.e. what
                   a German base month future settles against
   de_base_month_futures  EEX German base month futures settlements per trade date,
@@ -42,9 +43,16 @@ VIEWS = {
     "weather_actuals": "data/weather/actuals/*.csv",
     "weather_forecasts": "data/weather/forecasts/*.csv",
     "weather_points": "data/weather/points.csv",
+    "market_prices": "data/market/daily.csv",
+    "ttf_curve": "data/market/ttf_curve.csv",
 }
 
+# Gas-fired plant used for the marginal cost: efficiency and emissions per MWh of gas burnt.
+CCGT_EFFICIENCY = 0.50
+GAS_EMISSIONS_T_PER_MWH = 0.202
+
 RUN_LOGS = {
+    "runs_market": "data/market/runs.csv",
     "runs_eex": "data/eex/runs.csv",
     "runs_energy_charts": "data/energy_charts/runs.csv",
     "runs_weather": "data/weather/runs.csv",
@@ -78,6 +86,42 @@ def build(path: pathlib.Path = DB) -> duckdb.DuckDBPyConnection:
         con.execute(f"""CREATE OR REPLACE TABLE {name} AS
             SELECT {key}, {local_day} AS day, avg(COLUMNS(* EXCLUDE (timestamp_utc, {key})))
             FROM {src} GROUP BY ALL ORDER BY {key}, day""")
+
+    # Daily gas and carbon. EUA: EEX December front settlement where the scraper has it;
+    # before that, the WisdomTree Carbon ETC converted to EUR and scaled to the EEX level
+    # with the median ratio over the overlap (an approximation; the ETC carries fees and roll).
+    con.execute("""
+    CREATE OR REPLACE TABLE fuel_daily AS
+    WITH m AS (
+        SELECT CAST(date AS DATE) AS day,
+               max(close) FILTER (WHERE symbol = 'TTF=F') AS ttf,
+               max(close) FILTER (WHERE symbol = 'CARB.L') / max(close) FILTER (WHERE symbol = 'EURUSD=X') AS carb_eur
+        FROM market_prices GROUP BY ALL
+    ), eex AS (
+        SELECT CAST(trade_date AS DATE) AS day, arg_min(settlement, maturity) AS eua_eex
+        FROM eex_settlements
+        WHERE short_code = 'FEUA' AND settlement IS NOT NULL AND CAST(maturity AS VARCHAR) LIKE '%12'
+          AND maturity >= year(CAST(trade_date AS DATE)) * 100 + month(CAST(trade_date AS DATE))
+        GROUP BY ALL
+    ), ratio AS (
+        SELECT median(eua_eex / carb_eur) AS r FROM m JOIN eex USING (day) WHERE carb_eur > 0
+    ), cal AS (
+        SELECT CAST(unnest(generate_series(DATE '2020-01-01', current_date + INTERVAL 1 DAY, INTERVAL 1 DAY)) AS DATE) AS day
+    ), j AS (
+        SELECT cal.day, m.ttf, eex.eua_eex, m.carb_eur * (SELECT r FROM ratio) AS eua_proxy
+        FROM cal LEFT JOIN m USING (day) LEFT JOIN eex USING (day)
+    )
+    SELECT day,
+           last_value(ttf IGNORE NULLS) OVER w AS ttf_eur_mwh,
+           last_value(coalesce(eua_eex, eua_proxy) IGNORE NULLS) OVER w AS eua_eur_t,
+           last_value(CASE WHEN eua_eex IS NOT NULL THEN 'eex' WHEN eua_proxy IS NOT NULL THEN 'proxy' END IGNORE NULLS) OVER w AS eua_source
+    FROM j WINDOW w AS (ORDER BY day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+    ORDER BY day
+    """)
+    con.execute(f"""
+    ALTER TABLE fuel_daily ADD COLUMN gas_srmc_eur_mwh DOUBLE;
+    UPDATE fuel_daily SET gas_srmc_eur_mwh = (ttf_eur_mwh + {GAS_EMISSIONS_T_PER_MWH} * eua_eur_t) / {CCGT_EFFICIENCY};
+    """)
 
     points = ", ".join(f"'{p}'" for p in DE_DEMAND_POINTS)
     con.execute(f"""
@@ -117,9 +161,11 @@ def build(path: pathlib.Path = DB) -> duckdb.DuckDBPyConnection:
     SELECT p.day, p.base_price, p.peak_price, p.min_price, p.max_price, p.price_intervals,
            g.load_gw, g.residual_load_gw, g.wind_gw, g.solar_gw, g.gas_gen_gw, g.coal_gen_gw, g.gen_hours,
            x.net_imports_gw, w.temp_c,
+           f.ttf_eur_mwh, f.eua_eur_t, f.gas_srmc_eur_mwh,
            isodow(p.day) >= 6 AS is_weekend,
            strftime(p.day, '%Y%m') AS month
     FROM p LEFT JOIN g USING (day) LEFT JOIN x USING (day) LEFT JOIN w USING (day)
+    LEFT JOIN fuel_daily f ON f.day = p.day - INTERVAL 1 DAY  -- fuel prices known at auction time
     ORDER BY p.day
     """)
 

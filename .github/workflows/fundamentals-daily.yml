@@ -14,7 +14,7 @@ on:
       connectors:
         description: "Which connectors to run"
         type: choice
-        options: [all, energy_charts, open_meteo]
+        options: [all, energy_charts, open_meteo, yahoo]
         default: all
 
 permissions:
@@ -43,22 +43,28 @@ jobs:
 
       - name: Energy-Charts (prices, generation, forecasts, flows, capacity)
         id: energy_charts
-        if: inputs.connectors != 'open_meteo'
+        if: inputs.connectors != 'open_meteo' && inputs.connectors != 'yahoo'
         continue-on-error: true
         run: python -m connectors.energy_charts.fetch ${START:+--start "$START"}
 
       - name: Open-Meteo (weather actuals and forecasts)
         id: open_meteo
-        if: inputs.connectors != 'energy_charts'
+        if: inputs.connectors != 'energy_charts' && inputs.connectors != 'yahoo'
         continue-on-error: true
         run: python -m connectors.open_meteo.fetch ${START:+--start "$START"}
+
+      - name: Yahoo Finance (TTF gas, carbon proxy, EUR/USD)
+        id: yahoo
+        if: inputs.connectors != 'energy_charts' && inputs.connectors != 'open_meteo'
+        continue-on-error: true
+        run: python -m connectors.yahoo.fetch ${START:+--start "$START"}
 
       - name: Commit new data
         if: always()
         run: .github/scripts/commit-data.sh "Fundamentals $(date -u +%F)"
 
       - name: Fail the run if a connector failed
-        if: steps.energy_charts.outcome == 'failure' || steps.open_meteo.outcome == 'failure'
+        if: steps.energy_charts.outcome == 'failure' || steps.open_meteo.outcome == 'failure' || steps.yahoo.outcome == 'failure'
         run: |
-          echo "Energy-Charts: ${{ steps.energy_charts.outcome }}, Open-Meteo: ${{ steps.open_meteo.outcome }}"
+          echo "Energy-Charts: ${{ steps.energy_charts.outcome }}, Open-Meteo: ${{ steps.open_meteo.outcome }}, Yahoo: ${{ steps.yahoo.outcome }}"
           exit 1

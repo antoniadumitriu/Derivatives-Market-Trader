@@ -19,6 +19,7 @@ up as a failed workflow and GitHub emails you.
 import base64
 import datetime as dt
 import json
+import os
 import pathlib
 import sys
 import urllib.parse
@@ -211,6 +212,14 @@ def main() -> int:
             return 1
 
         h = catalog["header"]
+        everything = pd.DataFrame([dict(zip(h, r)) for r in catalog["data"]])
+        # What EEX lists overall, so the scope can be widened knowingly.
+        everything.groupby(["commodity", "pricing", "area", "product", "maturityType"], dropna=False) \
+            .agg(contracts=("shortCode", "size"), short_codes=("shortCode", lambda x: " ".join(sorted(set(x))))) \
+            .reset_index().to_csv(DATA / "catalog_summary.csv", index=False)
+        if os.environ.get("EEX_CATALOG_ONLY"):
+            print("Catalog summary written; EEX_CATALOG_ONLY is set, so no settlements are fetched.")
+            return 0
         contracts = [c for c in (dict(zip(h, r)) for r in catalog["data"]) if in_scope(c)]
         contracts = list({(c["shortCode"], c["maturity"]): c for c in contracts}.values())
         pd.DataFrame(contracts).sort_values(["commodity", "area", "shortCode", "maturity"]) \
