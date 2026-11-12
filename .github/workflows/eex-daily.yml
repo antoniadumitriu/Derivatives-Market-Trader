@@ -5,7 +5,12 @@ on:
     # 19:37 UTC (20:37 CET), Monday to Friday, after EEX publishes settlements.
     # GitHub cron runs in UTC and can start a few minutes late.
     - cron: "37 19 * * 1-5"
-  workflow_dispatch: {}  # adds a "Run workflow" button for manual runs
+  workflow_dispatch:  # adds a "Run workflow" button for manual runs
+    inputs:
+      catalog_only:
+        description: "Only refresh data/eex/catalog_summary.csv (fast), no settlements"
+        type: boolean
+        default: false
 
 permissions:
   contents: write  # lets the workflow commit the new data
@@ -34,6 +39,8 @@ jobs:
 
       - name: Scrape EEX
         run: python -m connectors.eex.scrape_eex
+        env:
+          EEX_CATALOG_ONLY: ${{ inputs.catalog_only && '1' || '' }}
 
       - name: Upload screenshots
         if: always()
