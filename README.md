@@ -30,6 +30,7 @@ connectors/
   eex/scrape_eex.py      EEX futures settlements (power and carbon)
   energy_charts/fetch.py Energy-Charts: spot prices, generation, forecasts, flows, capacity
   open_meteo/fetch.py    Open-Meteo: weather actuals and forecast snapshots
+  yahoo/fetch.py         Yahoo Finance: TTF gas, carbon proxy, EUR/USD
 data/
   eex/                   settlements/<year>.csv, contracts.csv, runs.csv
   energy_charts/         prices/, generation/, forecasts/, crossborder/ (one CSV per UTC month),
@@ -41,7 +42,7 @@ models/de_base_month.py  Bayesian model of the German base month index (NumPyro)
 reports/de_base_month/   latest model fit, backtest and comparison with EEX futures
 .github/workflows/
   eex-daily.yml          weekdays 19:37 UTC
-  fundamentals-daily.yml every day 13:17 UTC (Energy-Charts and Open-Meteo)
+  fundamentals-daily.yml every day 13:17 UTC (Energy-Charts, Open-Meteo, Yahoo Finance)
 ```
 
 All timestamps are UTC, written as `YYYY-MM-DDTHH:MM:SSZ`. Every connector upserts: re-running it over a period it has already collected replaces values with the latest published ones and never creates duplicates.
@@ -50,7 +51,10 @@ All timestamps are UTC, written as `YYYY-MM-DDTHH:MM:SSZ`. Every connector upser
 
 | Folder | Content | Resolution | Units | History |
 |---|---|---|---|---|
-| `eex/settlements` | ~1,200 futures: power base and peak (month, quarter, year) for all European EEX areas, plus EUA, UKA, ETS2. Settlement price, volume, open interest | daily | EUR/MWh, EUR/t | builds up from Sept 2026 (EEX only shows 45 days) |
+| `eex/settlements` | ~1,450 futures: power base and peak (month, quarter, year) for all European EEX areas; EUA, UKA, ETS2; TTF and THE gas (month, quarter, season, year). Settlement price, volume, open interest | daily | EUR/MWh, EUR/t | builds up from Sept 2026 (EEX only shows 45 days); gas from Nov 2026 |
+| `eex/catalog_summary.csv` | Everything EEX lists, grouped by commodity, area, product and maturity type, to decide what to add | per run | | |
+| `market/daily.csv` | TTF gas front month (Yahoo Finance), WisdomTree Carbon ETC as an EUA proxy, EUR/USD | daily | EUR/MWh, USD, rate | from 2020 |
+| `market/ttf_curve.csv` | TTF monthly contracts by trade date (the gas forward curve) | daily | EUR/MWh | from listing of each contract |
 | `energy_charts/prices` | Day-ahead auction prices for 16 bidding zones (DE-LU, FR, NL, BE, AT, CH, PL, CZ, HU, SI, IT-North, ES, DK1, DK2, NO2, SE4) | native: hourly to Sept 2025, 15 min after | EUR/MWh | from 2021 |
 | `energy_charts/generation` | Net public generation by technology, load, residual load, renewable shares, for DE, FR, NL, BE, AT, CH, PL, CZ | hourly mean | MW (shares in %) | from 2021 |
 | `energy_charts/forecasts` | Day-ahead forecasts of solar, onshore and offshore wind, and load, same countries (where published) | hourly mean | MW | from 2021 |
@@ -90,6 +94,7 @@ delivery day with base and peak prices and fundamentals), `de_month_index` (real
 
 - **EEX** public market data pages. Check the EEX terms of use regarding automated access; the scraper spaces requests out and runs once a day.
 - **Energy-Charts** (Fraunhofer ISE), data under CC BY 4.0, with upstream sources such as ENTSO-E and Bundesnetzagentur/SMARD named in the API responses. Cite them if you publish results.
+- **Yahoo Finance** chart data, for personal and non-commercial use. A commercial product should switch to EEX or ICE data.
 - **Open-Meteo**, data under CC BY 4.0. The free API is for non-commercial use; a commercial product needs one of their paid plans.
 
 ## Notes
