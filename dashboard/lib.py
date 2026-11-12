@@ -88,6 +88,37 @@ def q(sql: str, params: tuple = ()) -> pd.DataFrame:
     return _q(stamp, sql, tuple(params))
 
 
+MONTHS_IN = {"Month": 1, "Quarter": 3, "Season": 6, "Year": 12}
+
+
+def contract_label(maturity, mtype) -> str:
+    """EEX maturity (YYYYMM of the first delivery month) and type -> Jan-27, Q1-27, Win-26, Cal-27."""
+    m = str(maturity)
+    start = pd.Timestamp(f"{m[:4]}-{m[4:6]}-01")
+    if mtype == "Quarter":
+        return f"Q{(start.month - 1) // 3 + 1}-{start:%y}"
+    if mtype == "Year":
+        return f"Cal-{start:%y}"
+    if mtype == "Season":
+        return f"{'Sum' if start.month == 4 else 'Win'}-{start:%y}"
+    return start.strftime("%b-%y")
+
+
+def ttf_quote() -> dict:
+    """Latest TTF front-month price from Yahoo Finance, the one before it and how to describe it.
+    Prices are taken as collected, not forward-filled, so the change is against the previous
+    trading day. A price for the day of the last collection run before 18:00 UTC is intraday."""
+    d = q("SELECT CAST(date AS DATE) AS day, close FROM market_prices WHERE symbol = 'TTF=F' "
+          "AND close IS NOT NULL ORDER BY day DESC LIMIT 2")
+    run = q("SELECT max(CAST(run_utc AS TIMESTAMP)) AS t FROM runs_market")["t"].iloc[0]
+    day = pd.Timestamp(d["day"].iloc[0]).date()
+    run = pd.Timestamp(run) if pd.notna(run) else None
+    intraday = run is not None and run.date() == day and run.hour < 18
+    when = f"intraday price on {day:%d %b %Y}, as of {run:%H:%M} UTC" if intraday else f"close on {day:%d %b %Y}"
+    return {"value": d["close"].iloc[0], "prev": d["close"].iloc[1] if len(d) > 1 else None,
+            "day": day, "intraday": intraday, "label": f"Yahoo Finance {when}"}
+
+
 def rebuild_button():
     with st.sidebar:
         st.caption("The warehouse rebuilds automatically when the CSVs change (for example after `git pull`).")

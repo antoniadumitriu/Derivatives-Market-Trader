@@ -2,7 +2,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from lib import INK, INK2, MUTED, SERIES, color_map, date_range, fig_defaults, page, q, rebuild_button, show
+from lib import INK, INK2, MUTED, SERIES, color_map, date_range, fig_defaults, page, q, rebuild_button, show, ttf_quote
 
 from pipeline.build_db import CCGT_EFFICIENCY, GAS_EMISSIONS_T_PER_MWH
 
@@ -17,10 +17,16 @@ with f[1]:
 trunc = {"Day": "day", "Week": "week", "Month": "month"}[grain or "Week"]
 
 latest = q("SELECT * FROM fuel_daily WHERE ttf_eur_mwh IS NOT NULL ORDER BY day DESC LIMIT 1").iloc[0]
+eua_day = q("SELECT max(day) AS d FROM fuel_daily WHERE eua_source = 'eex' AND eua_eur_t IS NOT NULL")["d"].iloc[0]
+ttf = ttf_quote()
 c = st.columns(3)
-c[0].metric("TTF gas front month (€/MWh)", f"{latest['ttf_eur_mwh']:.2f}", help=f"As of {latest['day']:%d %b %Y}. Yahoo Finance.")
+c[0].metric("TTF gas front month (€/MWh)" + (" (intraday)" if ttf["intraday"] else ""), f"{ttf['value']:.2f}",
+            None if ttf["prev"] is None else f"{ttf['value'] - ttf['prev']:+.2f}", delta_color="off",
+            help=f"{ttf['label']}. Change is against the previous trading day.")
 c[1].metric("EUA carbon (€/t)", f"{latest['eua_eur_t']:.2f}",
-            help="EEX December future. Before Sept 2026: a carbon ETC scaled to the EEX level.")
+            help="EEX December future, last settlement"
+                 + (f" ({pd.Timestamp(eua_day):%d %b %Y})" if pd.notna(eua_day) else "")
+                 + ". Before Sept 2026 the history uses a carbon ETC scaled to the EEX level.")
 c[2].metric("Gas plant cost (€/MWh)", f"{latest['gas_srmc_eur_mwh']:.2f}",
             help=f"Fuel and carbon cost of a gas-fired plant at {CCGT_EFFICIENCY:.0%} efficiency: "
                  f"(gas + {GAS_EMISSIONS_T_PER_MWH} t/MWh x carbon) / {CCGT_EFFICIENCY}.")

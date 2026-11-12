@@ -10,6 +10,7 @@ st.set_page_config(page_title="Derivatives Market Trader", layout="wide")
 nav = st.navigation({
     "Markets": [
         st.Page("views/overview.py", title="Overview", default=True),
+        st.Page("views/hedging.py", title="Hedging summary", url_path="hedging"),
         st.Page("views/futures.py", title="EEX futures", url_path="futures"),
         st.Page("views/spot_prices.py", title="Day-ahead prices", url_path="spot-prices"),
         st.Page("views/fuels.py", title="Gas and carbon", url_path="gas-carbon"),

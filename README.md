@@ -14,6 +14,7 @@ Opens at http://localhost:8501. Pages:
 | Page | What it shows |
 |---|---|
 | Overview | Headline prices (spot, front month, EUA, model) and data health: latest data point per dataset and the status of the last collection run per source |
+| Hedging summary | The contracts a buyer hedges with (next 3 months, 4 quarters, 3 calendar years) for any power area, base or peak: settlement, change over 1 day, 1 week and 4 weeks, low/high since collection started, a trend line, and a plain-language summary of the week. TTF gas and EUA carbon alongside |
 | EEX futures | Forward curves for any power area (base or peak), gas hub (TTF, THE) or carbon product on any trade date, compared with an earlier date, plus settlement history per contract |
 | Day-ahead prices | Daily, weekly or monthly prices for up to 8 bidding zones, the average daily shape, and the share of negative-price intervals |
 | Gas and carbon | TTF gas, EUA carbon, the cost of gas-fired power against the German power price, and the TTF forward curve |

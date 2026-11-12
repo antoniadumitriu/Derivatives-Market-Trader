@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from lib import INK2, MODEL, OBSERVED, fig_defaults, page, q, rebuild_button, show
+from lib import INK2, MODEL, OBSERVED, fig_defaults, page, q, rebuild_button, show, ttf_quote
 
 page("Overview", "European power and carbon: headline numbers and data health. Prices in €/MWh unless noted.")
 rebuild_button()
@@ -53,13 +53,14 @@ c[2].metric(f"EEX DE base {mlabel(front['month'].iloc[0])}",
 c[3].metric(f"EEX EUA Dec-{str(eua['maturity'].iloc[0])[2:4]} (€/t)", f"{eua['settlement'].iloc[0]:.2f}",
             delta(eua, "settlement"), delta_color="off",
             help=f"Settlement on {eua['trade_date'].iloc[0]:%d %b %Y}.")
-fuel = q("SELECT * FROM fuel_daily WHERE ttf_eur_mwh IS NOT NULL ORDER BY day DESC LIMIT 2")
-c[4].metric("TTF gas front month", f"{fuel['ttf_eur_mwh'].iloc[0]:.2f}", delta(fuel, "ttf_eur_mwh"), delta_color="off",
-            help=f"Yahoo Finance close for {fuel['day'].iloc[0]:%d %b %Y}. See the Gas and carbon page.")
+ttf = ttf_quote()
+c[4].metric("TTF gas front month" + (" (intraday)" if ttf["intraday"] else ""), f"{ttf['value']:.2f}",
+            None if ttf["prev"] is None else f"{ttf['value'] - ttf['prev']:+.2f}", delta_color="off",
+            help=f"{ttf['label']}. Change is against the previous trading day. See the Gas and carbon page.")
 if model is not None:
     c[5].metric(f"Model DE base {mlabel(model['month'])}", f"{model['mean']:.2f}",
                 f"{model['mean'] - model['futures']:+.2f} vs futures", delta_color="off",
-                help="Posterior mean of the Bayesian month model (version 2, with gas and carbon). See the model page.")
+                help="Posterior mean of the current version of the Bayesian month model. See the model page.")
 
 # ---------------------------------------------------------------- price chart
 hist = q("""SELECT day, base FROM prices_daily WHERE zone = 'DE-LU' AND day >= current_date - INTERVAL 120 DAY ORDER BY day""")

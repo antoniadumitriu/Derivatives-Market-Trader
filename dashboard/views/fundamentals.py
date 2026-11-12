@@ -4,7 +4,7 @@ import streamlit as st
 
 from lib import INK, SERIES, color_map, date_range, fig_defaults, page, q, rebuild_button, show
 
-page("Fundamentals", "Generation, load, forecasts, cross-border flows and capacity (Energy-Charts). Daily averages, GW.")
+page("Fundamentals", "Generation, load, forecasts, cross-border flows and capacity (Energy-Charts). Daily averages, GW. A day with any hour missing is left blank rather than averaged over the hours that are there.")
 rebuild_button()
 
 COUNTRIES = {"de": "Germany", "fr": "France", "nl": "Netherlands", "be": "Belgium",

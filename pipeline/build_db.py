@@ -51,6 +51,25 @@ VIEWS = {
 CCGT_EFFICIENCY = 0.50
 GAS_EMISSIONS_T_PER_MWH = 0.202
 
+# A daily value is kept only when every hour of the local day has data for it; otherwise it is
+# NULL. A partly published day (e.g. today, or a collection run that failed half way) would
+# otherwise show as a full day averaged over the hours that happen to be there.
+HOUR = "date_trunc('hour', CAST(timestamp_utc AS TIMESTAMPTZ))"
+HOURS_IN_DAY = ("date_diff('hour', timezone('Europe/Berlin', CAST(day AS TIMESTAMP)), "
+                "timezone('Europe/Berlin', CAST(day + 1 AS TIMESTAMP)))")
+
+
+def qi(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def complete_avg(expr: str, scale: str = "") -> str:
+    """avg(expr) over a local day, or NULL unless expr has a value in every hour of that day.
+    Needs columns `day` and `hour_utc` in scope."""
+    return (f"CASE WHEN count(DISTINCT CASE WHEN ({expr}) IS NOT NULL THEN hour_utc END) >= {HOURS_IN_DAY} "
+            f"THEN avg({expr}){scale} END")
+
+
 RUN_LOGS = {
     "runs_market": "data/market/runs.csv",
     "runs_eex": "data/eex/runs.csv",
@@ -83,9 +102,13 @@ def build(path: pathlib.Path = DB) -> duckdb.DuckDBPyConnection:
                            ("crossborder_daily", "crossborder", "country"),
                            ("power_forecasts_daily", "power_forecasts", "country"),
                            ("weather_daily", "weather_actuals", "point")):
+        cols = [c for c in con.execute(f"SELECT * FROM {src} LIMIT 0").fetchdf().columns
+                if c not in ("timestamp_utc", key)]
+        aggs = ", ".join(f'{complete_avg(f"{qi(c)}")} AS {qi(c)}' for c in cols)
         con.execute(f"""CREATE OR REPLACE TABLE {name} AS
-            SELECT {key}, {local_day} AS day, avg(COLUMNS(* EXCLUDE (timestamp_utc, {key})))
-            FROM {src} GROUP BY ALL ORDER BY {key}, day""")
+            SELECT {key}, day, {aggs}
+            FROM (SELECT *, {local_day} AS day, {HOUR} AS hour_utc FROM {src})
+            GROUP BY {key}, day ORDER BY {key}, day""")
 
     # Daily gas and carbon. EUA: EEX December front settlement where the scraper has it;
     # before that, the WisdomTree Carbon ETC converted to EUR and scaled to the EEX level
@@ -106,9 +129,12 @@ def build(path: pathlib.Path = DB) -> duckdb.DuckDBPyConnection:
     ), ratio AS (
         SELECT median(eua_eex / carb_eur) AS r FROM m JOIN eex USING (day) WHERE carb_eur > 0
     ), cal AS (
-        SELECT CAST(unnest(generate_series(DATE '2020-01-01', current_date + INTERVAL 1 DAY, INTERVAL 1 DAY)) AS DATE) AS day
+        SELECT CAST(unnest(generate_series(DATE '2020-01-01', current_date, INTERVAL 1 DAY)) AS DATE) AS day
     ), j AS (
-        SELECT cal.day, m.ttf, eex.eua_eex, m.carb_eur * (SELECT r FROM ratio) AS eua_proxy
+        SELECT cal.day, m.ttf, eex.eua_eex,
+               -- the proxy only fills the years before the EEX history; afterwards a missing
+               -- EEX day carries the last EEX settlement forward
+               CASE WHEN cal.day < (SELECT min(day) FROM eex) THEN m.carb_eur * (SELECT r FROM ratio) END AS eua_proxy
         FROM cal LEFT JOIN m USING (day) LEFT JOIN eex USING (day)
     )
     SELECT day,
@@ -140,23 +166,23 @@ def build(path: pathlib.Path = DB) -> duckdb.DuckDBPyConnection:
                count(*) AS price_intervals
         FROM price GROUP BY day
     ), g AS (
-        SELECT CAST(timezone('Europe/Berlin', CAST(timestamp_utc AS TIMESTAMPTZ)) AS DATE) AS day,
-               avg(load) / 1000 AS load_gw,
-               avg(residual_load) / 1000 AS residual_load_gw,
-               avg(coalesce(wind_onshore, 0) + coalesce(wind_offshore, 0)) / 1000 AS wind_gw,
-               avg(solar) / 1000 AS solar_gw,
-               avg(fossil_gas) / 1000 AS gas_gen_gw,
-               avg(fossil_brown_coal_lignite + coalesce(fossil_hard_coal, 0)) / 1000 AS coal_gen_gw,
-               count(*) AS gen_hours
-        FROM generation WHERE country = 'de' GROUP BY day
+        SELECT day,
+               {complete_avg("load", " / 1000")} AS load_gw,
+               {complete_avg("residual_load", " / 1000")} AS residual_load_gw,
+               {complete_avg("wind_onshore + coalesce(wind_offshore, 0)", " / 1000")} AS wind_gw,
+               {complete_avg("solar", " / 1000")} AS solar_gw,
+               {complete_avg("fossil_gas", " / 1000")} AS gas_gen_gw,
+               {complete_avg("fossil_brown_coal_lignite + coalesce(fossil_hard_coal, 0)", " / 1000")} AS coal_gen_gw,
+               count(DISTINCT hour_utc) AS gen_hours
+        FROM (SELECT *, {local_day} AS day, {HOUR} AS hour_utc FROM generation WHERE country = 'de') GROUP BY day
     ), x AS (
-        SELECT CAST(timezone('Europe/Berlin', CAST(timestamp_utc AS TIMESTAMPTZ)) AS DATE) AS day,
-               avg(sum) AS net_imports_gw
-        FROM crossborder WHERE country = 'de' GROUP BY day
+        SELECT day, {complete_avg("sum")} AS net_imports_gw
+        FROM (SELECT *, {local_day} AS day, {HOUR} AS hour_utc FROM crossborder WHERE country = 'de') GROUP BY day
     ), w AS (
-        SELECT CAST(timezone('Europe/Berlin', CAST(timestamp_utc AS TIMESTAMPTZ)) AS DATE) AS day,
-               avg(temperature_2m) AS temp_c
-        FROM weather_actuals WHERE point IN ({points}) GROUP BY day
+        -- all six demand centres, each with a complete day
+        SELECT day, avg(temperature_2m) AS temp_c
+        FROM weather_daily WHERE point IN ({points}) GROUP BY day
+        HAVING count(temperature_2m) = {len(DE_DEMAND_POINTS)}
     )
     SELECT p.day, p.base_price, p.peak_price, p.min_price, p.max_price, p.price_intervals,
            g.load_gw, g.residual_load_gw, g.wind_gw, g.solar_gw, g.gas_gen_gw, g.coal_gen_gw, g.gen_hours,

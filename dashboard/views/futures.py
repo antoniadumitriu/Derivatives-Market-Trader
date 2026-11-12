@@ -2,25 +2,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from lib import INK2, MUTED, SERIES, color_map, fig_defaults, page, q, rebuild_button, show
+from lib import INK2, MONTHS_IN, MUTED, SERIES, color_map, contract_label, fig_defaults, page, q, rebuild_button, show
 
 page("EEX futures", "Daily settlement prices collected from EEX. History starts when the scraper started (Sept 2026).")
 rebuild_button()
-
-MONTHS_IN = {"Month": 1, "Quarter": 3, "Season": 6, "Year": 12}
-
-
-def contract_label(maturity, mtype) -> str:
-    m = str(maturity)
-    start = pd.Timestamp(f"{m[:4]}-{m[4:6]}-01")
-    if mtype == "Quarter":
-        return f"Q{(start.month - 1) // 3 + 1}-{start:%y}"
-    if mtype == "Year":
-        return f"Cal-{start:%y}"
-    if mtype == "Season":
-        return f"{'Sum' if start.month == 4 else 'Win'}-{start:%y}"
-    return start.strftime("%b-%y")
-
 
 # ---------------------------------------------------------------- filters
 f = st.columns([1.6, 1, 1, 1.4, 1.4])

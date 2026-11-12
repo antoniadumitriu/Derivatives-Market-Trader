@@ -6,7 +6,7 @@ import streamlit as st
 
 from lib import GRID, INK2, MODEL, color_map, date_range, fig_defaults, page, q, rebuild_button, show
 
-page("Weather", "Open-Meteo reanalysis actuals and the latest 16-day forecast at the 12 tracked points.")
+page("Weather", "Open-Meteo reanalysis actuals and the latest 16-day forecast at the 12 tracked points. Daily values need every hour of the day, so today shows as forecast only.")
 rebuild_button()
 
 VARS = {"temperature_2m": ("Temperature", "°C"), "wind_speed_100m": ("Wind speed at 100 m", "m/s"),
