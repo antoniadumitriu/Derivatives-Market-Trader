@@ -2,9 +2,13 @@
 
   python -m pipeline.build_db            # writes data/warehouse.duckdb (not committed)
 
-Raw views (straight over the CSVs, always current):
+Raw tables (copies of the CSVs as of the last build):
   eex_settlements, da_prices, generation, power_forecasts, crossborder,
-  installed_capacity, weather_actuals, weather_forecasts, weather_points
+  installed_capacity, weather_actuals, weather_forecasts, weather_points,
+  runs_eex, runs_energy_charts, runs_weather
+
+Daily tables (delivery day in Europe/Berlin), for the dashboard:
+  prices_daily, generation_daily, crossborder_daily, power_forecasts_daily, weather_daily
 
 Modeling tables (rebuilt each time):
   de_daily        one row per German delivery day (Europe/Berlin): day-ahead base
@@ -16,6 +20,7 @@ Modeling tables (rebuilt each time):
                   with months-to-delivery (1 = front month)
 """
 
+import os
 import pathlib
 
 import duckdb
@@ -39,13 +44,40 @@ VIEWS = {
     "weather_points": "data/weather/points.csv",
 }
 
+RUN_LOGS = {
+    "runs_eex": "data/eex/runs.csv",
+    "runs_energy_charts": "data/energy_charts/runs.csv",
+    "runs_weather": "data/weather/runs.csv",
+}
+
 
 def build(path: pathlib.Path = DB) -> duckdb.DuckDBPyConnection:
     con = duckdb.connect(str(path))
     con.execute("SET TimeZone = 'UTC'")
     for name, pattern in VIEWS.items():
-        con.execute(f"""CREATE OR REPLACE VIEW {name} AS
+        con.execute(f"""CREATE OR REPLACE TABLE {name} AS
             SELECT * FROM read_csv('{ROOT / pattern}', union_by_name = true, header = true)""")
+    for name, pattern in RUN_LOGS.items():
+        con.execute(f"""CREATE OR REPLACE TABLE {name} AS
+            SELECT * FROM read_csv('{ROOT / pattern}', header = true, all_varchar = true)""")
+
+    # Daily aggregates (delivery day in Europe/Berlin) for every country, zone and point.
+    local_day = "CAST(timezone('Europe/Berlin', CAST(timestamp_utc AS TIMESTAMPTZ)) AS DATE)"
+    con.execute(f"""
+    CREATE OR REPLACE TABLE prices_daily AS
+    SELECT zone, {local_day} AS day, avg(price_eur_mwh) AS base,
+           avg(price_eur_mwh) FILTER (WHERE hour(timezone('Europe/Berlin', CAST(timestamp_utc AS TIMESTAMPTZ))) BETWEEN 8 AND 19
+                                       AND isodow({local_day}) <= 5) AS peak,
+           min(price_eur_mwh) AS min, max(price_eur_mwh) AS max,
+           count(*) FILTER (WHERE price_eur_mwh < 0) AS negative_intervals, count(*) AS intervals
+    FROM da_prices GROUP BY ALL ORDER BY zone, day""")
+    for name, src, key in (("generation_daily", "generation", "country"),
+                           ("crossborder_daily", "crossborder", "country"),
+                           ("power_forecasts_daily", "power_forecasts", "country"),
+                           ("weather_daily", "weather_actuals", "point")):
+        con.execute(f"""CREATE OR REPLACE TABLE {name} AS
+            SELECT {key}, {local_day} AS day, avg(COLUMNS(* EXCLUDE (timestamp_utc, {key})))
+            FROM {src} GROUP BY ALL ORDER BY {key}, day""")
 
     points = ", ".join(f"'{p}'" for p in DE_DEMAND_POINTS)
     con.execute(f"""
@@ -112,8 +144,18 @@ def build(path: pathlib.Path = DB) -> duckdb.DuckDBPyConnection:
     return con
 
 
+def rebuild() -> None:
+    """Build into a temporary file and swap it in, so readers that have the warehouse
+    open (the dashboard, a running model) keep working."""
+    tmp = DB.with_name("warehouse.building.duckdb")
+    tmp.unlink(missing_ok=True)
+    build(tmp).close()
+    os.replace(tmp, DB)
+
+
 if __name__ == "__main__":
-    con = build()
+    rebuild()
+    con = duckdb.connect(str(DB), read_only=True)
     for t in ("de_daily", "de_month_index", "de_base_month_futures"):
         n, lo, hi = con.execute(f"SELECT count(*), min({'day' if t == 'de_daily' else 'month' if t == 'de_month_index' else 'trade_date'}), "
                                 f"max({'day' if t == 'de_daily' else 'month' if t == 'de_month_index' else 'trade_date'}) FROM {t}").fetchone()

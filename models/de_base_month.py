@@ -40,7 +40,7 @@ import numpyro.distributions as dist
 import pandas as pd
 from numpyro.infer import MCMC, NUTS
 
-from pipeline.build_db import DB, build
+from pipeline.build_db import DB, rebuild
 
 numpyro.set_host_device_count(2)
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -51,7 +51,7 @@ CLIMATE_YEARS = 3  # residual load scenarios come from this many most recent com
 # ---------------------------------------------------------------- data
 
 def load_daily() -> pd.DataFrame:
-    con = build(DB) if not DB.exists() else __import__("duckdb").connect(str(DB), read_only=True)
+    con = __import__("duckdb").connect(str(DB), read_only=True)
     df = con.execute("""SELECT day, base_price, residual_load_gw, is_weekend, month
                         FROM de_daily WHERE gen_hours >= 23 AND residual_load_gw IS NOT NULL
                         ORDER BY day""").df()
@@ -258,7 +258,7 @@ def main():
     ap.add_argument("--no-forecast", action="store_true")
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
-    build(DB).close()
+    rebuild()
     daily, index, futures = load_daily(), load_index(), load_futures()
     if not args.no_forecast:
         run_forecast(daily, index, futures)

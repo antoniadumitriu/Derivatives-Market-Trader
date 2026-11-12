@@ -1,6 +1,26 @@
 # Derivatives Market Trader
 
-Data collection, and later modeling, for Bayesian models of European power and carbon derivative markets. Every source used here is free and public and needs no API key or account.
+Data collection, Bayesian modeling and a dashboard for European power and carbon derivative markets. Every source used here is free and public and needs no API key or account.
+
+## Dashboard
+
+```
+pip install -r requirements.txt
+streamlit run dashboard/app.py
+```
+
+Opens at http://localhost:8501. Pages:
+
+| Page | What it shows |
+|---|---|
+| Overview | Headline prices (spot, front month, EUA, model) and data health: latest data point per dataset and the status of the last collection run per source |
+| EEX futures | Forward curves for any power area (base or peak) or carbon product on any trade date, compared with an earlier date, plus settlement history per contract |
+| Day-ahead prices | Daily, weekly or monthly prices for up to 8 bidding zones, the average daily shape, and the share of negative-price intervals |
+| Fundamentals | Generation mix and load, price vs. residual load (the merit order), wind and solar forecast vs. actual, cross-border flows and installed capacity, per country |
+| Weather | Actuals and the latest 16-day forecast at the tracked points, and German temperature vs. normal |
+| German base month | The Bayesian model: forecasts vs. EEX futures, the 24-month backtest, and the weekly states it estimates. A sidebar button refits it on the latest data |
+
+Every chart has hover values and a table view. The dashboard reads `data/warehouse.duckdb`, which it rebuilds from the CSVs on start and whenever they change (for example after `git pull`).
 
 ## Layout
 
@@ -15,6 +35,7 @@ data/
   energy_charts/         prices/, generation/, forecasts/, crossborder/ (one CSV per UTC month),
                          installed_capacity.csv, runs.csv
   weather/               actuals/, forecasts/ (one CSV per month), points.csv, runs.csv
+dashboard/                Streamlit dashboard (app.py, views/, lib.py)
 pipeline/build_db.py     loads all CSVs into data/warehouse.duckdb (local, not committed)
 models/de_base_month.py  Bayesian model of the German base month index (NumPyro)
 reports/de_base_month/   latest model fit, backtest and comparison with EEX futures
