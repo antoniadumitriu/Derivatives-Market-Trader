@@ -18,7 +18,8 @@ if str(ROOT) not in sys.path:
 
 from pipeline.build_db import DB, rebuild  # noqa: E402
 
-REPORTS = ROOT / "reports" / "de_base_month"
+REPORTS = ROOT / "reports" / "de_base_month_v2"      # current model
+REPORTS_V1 = ROOT / "reports" / "de_base_month"
 
 # ---------------------------------------------------------------- palette
 # Categorical hues, assigned in this fixed order and never cycled (max 8 series).
@@ -68,12 +69,18 @@ def data_stamp() -> float:
 
 
 def con() -> duckdb.DuckDBPyConnection:
-    return _connection(data_stamp())
+    return _connection(max(data_stamp(), DB.stat().st_mtime if DB.exists() else 0))
 
 
-@st.cache_data(show_spinner=False, ttl=600)
+@st.cache_data(show_spinner=False, max_entries=500)
+def _q(stamp: float, sql: str, params: tuple) -> pd.DataFrame:
+    return _connection(stamp).execute(sql, list(params)).df()
+
+
 def q(sql: str, params: tuple = ()) -> pd.DataFrame:
-    return con().execute(sql, list(params)).df()
+    """Run a query; results are cached until the data files or the warehouse change."""
+    stamp = max(data_stamp(), DB.stat().st_mtime if DB.exists() else 0)
+    return _q(stamp, sql, tuple(params))
 
 
 def rebuild_button():

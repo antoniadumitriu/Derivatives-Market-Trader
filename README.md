@@ -14,11 +14,12 @@ Opens at http://localhost:8501. Pages:
 | Page | What it shows |
 |---|---|
 | Overview | Headline prices (spot, front month, EUA, model) and data health: latest data point per dataset and the status of the last collection run per source |
-| EEX futures | Forward curves for any power area (base or peak) or carbon product on any trade date, compared with an earlier date, plus settlement history per contract |
+| EEX futures | Forward curves for any power area (base or peak), gas hub (TTF, THE) or carbon product on any trade date, compared with an earlier date, plus settlement history per contract |
 | Day-ahead prices | Daily, weekly or monthly prices for up to 8 bidding zones, the average daily shape, and the share of negative-price intervals |
+| Gas and carbon | TTF gas, EUA carbon, the cost of gas-fired power against the German power price, and the TTF forward curve |
 | Fundamentals | Generation mix and load, price vs. residual load (the merit order), wind and solar forecast vs. actual, cross-border flows and installed capacity, per country |
 | Weather | Actuals and the latest 16-day forecast at the tracked points, and German temperature vs. normal |
-| German base month | The Bayesian model: forecasts vs. EEX futures, the 24-month backtest, and the weekly states it estimates. A sidebar button refits it on the latest data |
+| German base month | The Bayesian model (version 2, or version 1 for comparison): forecasts vs. EEX futures, the 24-month backtest, and the weekly states it estimates. A sidebar button refits it on the latest data |
 
 Every chart has hover values and a table view. The dashboard reads `data/warehouse.duckdb`, which it rebuilds from the CSVs on start and whenever they change (for example after `git pull`).
 
@@ -38,8 +39,10 @@ data/
   weather/               actuals/, forecasts/ (one CSV per month), points.csv, runs.csv
 dashboard/                Streamlit dashboard (app.py, views/, lib.py)
 pipeline/build_db.py     loads all CSVs into data/warehouse.duckdb (local, not committed)
-models/de_base_month.py  Bayesian model of the German base month index (NumPyro)
-reports/de_base_month/   latest model fit, backtest and comparison with EEX futures
+models/de_base_month_v2.py  Bayesian model of the German base month index, anchored on gas and carbon costs (current)
+models/de_base_month.py     version 1, price level only (kept for comparison)
+reports/de_base_month_v2/   latest v2 fit, backtest, comparison with v1 and with EEX futures
+reports/de_base_month/      the same for v1
 .github/workflows/
   eex-daily.yml          weekdays 19:37 UTC
   fundamentals-daily.yml every day 13:17 UTC (Energy-Charts, Open-Meteo, Yahoo Finance)
@@ -81,14 +84,15 @@ python -m connectors.open_meteo.fetch     [--start 2021-01-01] [--datasets actua
 
 ```
 python -m pipeline.build_db                       # build the DuckDB warehouse
-python -m models.de_base_month --backtest 24      # fit, forecast the next 3 months, backtest 24 months
-python -m models.report_de_base_month             # write reports/de_base_month/README.md and charts
+python -m models.de_base_month_v2 --backtest 24   # fit, forecast the next 3 months, backtest 24 months (~50 min)
+python -m models.report_de_base_month             # write reports/de_base_month_v2/README.md and charts
+python -m models.de_base_month --backtest 24      # version 1, then: python -m models.report_de_base_month --model v1
 ```
 
 The warehouse has raw views over every dataset plus three modeling tables: `de_daily` (one row per German
 delivery day with base and peak prices and fundamentals), `de_month_index` (realised monthly base index) and
-`de_base_month_futures` (EEX German base month futures by trade date). Results of the latest run are in
-[reports/de_base_month](reports/de_base_month/README.md).
+`de_base_month_futures` (EEX German base month futures by trade date), plus `fuel_daily` (TTF gas, EUA carbon and
+the cost of gas-fired power). Results of the latest run are in [reports/de_base_month_v2](reports/de_base_month_v2/README.md).
 
 ## Sources and terms
 

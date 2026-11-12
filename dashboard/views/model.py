@@ -7,13 +7,17 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from lib import INK, INK2, MODEL, OBSERVED, REPORTS, ROOT, fig_defaults, page, rebuild_button, show
+from lib import INK, INK2, MODEL, OBSERVED, REPORTS, REPORTS_V1, ROOT, fig_defaults, page, rebuild_button, show
 
 page("Model: German base month", "Bayesian model of the monthly German base price index, compared with EEX futures.")
 rebuild_button()
 
+VERSIONS = {"Version 2: with gas and carbon": ("v2", REPORTS, "models.de_base_month_v2"),
+            "Version 1: price level only": ("v1", REPORTS_V1, "models.de_base_month")}
+choice = st.segmented_control("Model", list(VERSIONS), default=list(VERSIONS)[0])
+version, REPORTS, module = VERSIONS[choice or list(VERSIONS)[0]]
 if not (REPORTS / "forecast.csv").exists():
-    st.warning("No model outputs yet. Run `python -m models.de_base_month --backtest 24` first.")
+    st.warning(f"No model outputs yet. Run `python -m {module} --backtest 24` first.")
     st.stop()
 
 fc = pd.read_csv(REPORTS / "forecast.csv", dtype={"month": str})
@@ -27,13 +31,13 @@ def mlabel(m) -> str:
 
 
 with st.sidebar:
-    st.markdown("**Refit the model**")
+    st.markdown(f"**Refit model {version}**")
     st.caption("Refits on the latest data and refreshes the forecast (about 3 minutes). "
                "The 24-month backtest takes about 20 minutes and runs from the command line.")
     if st.button("Refit now"):
         with st.status("Fitting the model ...", expanded=True) as status:
-            for cmd in ([sys.executable, "-m", "models.de_base_month"],
-                        [sys.executable, "-m", "models.report_de_base_month"]):
+            for cmd in ([sys.executable, "-m", module],
+                        [sys.executable, "-m", "models.report_de_base_month", "--model", version]):
                 r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
                 if r.returncode:
                     st.code(r.stderr[-2000:])
@@ -76,8 +80,12 @@ x = [mlabel(m) for m in fc["month"]]
 intervals(fig, x, fc, fc["futures"], "EEX settlement")
 show(fig_defaults(fig, "Delivery months ahead", "€/MWh", 400),
      fc[["month", "mean", "p05", "p25", "p50", "p75", "p95", "futures", "p_futures_above_model"]].round(2), key="fwd")
+if "ttf_forward" in fc:
+    st.caption("Gas used for each month: " + ", ".join(
+        f"{mlabel(r['month'])} TTF {r['ttf_forward']:.2f} €/MWh ({r['ttf_source']})" for _, r in fc.iterrows())
+        + f"; EUA {fc['eua'].iloc[0]:.2f} €/t; TTF volatility {fc['gas_vol'].iloc[0]:.0%} a year.")
 st.caption("Probability below futures near 50% means model and market agree. Well above 50% means the model sees "
-           "futures as expensive, well below means cheap. The model does not see gas prices yet.")
+           "futures as expensive, well below means cheap." + (" Version 1 does not see gas prices." if version == "v1" else ""))
 
 # ---------------------------------------------------------------- backtest
 if bt is not None:
@@ -90,6 +98,20 @@ if bt is not None:
     m[2].metric("90% interval coverage", f"{bt['in_90'].mean():.0%}", "target 90%", delta_color="off")
     m[3].metric("Mean error (bias)", f"{(bt['mean'] - bt['actual']).mean():+.1f} €/MWh",
                 help="Positive means the model forecast too high on average.")
+    if version == "v2" and (REPORTS_V1 / "backtest.csv").exists():
+        v1 = pd.read_csv(REPORTS_V1 / "backtest.csv", dtype={"target": str})
+        rows = []
+        for name, b in (("Version 1", v1), ("Version 2", bt)):
+            rows.append({"model": name, "mean abs. error €/MWh": b["abs_err_mean"].mean(),
+                         "bias €/MWh": (b["mean"] - b["actual"]).mean(), "50% coverage": 100 * b["in_50"].mean(),
+                         "90% coverage": 100 * b["in_90"].mean(), "CRPS": b["crps"].mean()})
+        st.caption("Both versions on the same months")
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch",
+                     column_config={"50% coverage": st.column_config.NumberColumn(format="%.0f%%"),
+                                    "90% coverage": st.column_config.NumberColumn(format="%.0f%%"),
+                                    "mean abs. error €/MWh": st.column_config.NumberColumn(format="%.1f"),
+                                    "bias €/MWh": st.column_config.NumberColumn(format="%+.1f"),
+                                    "CRPS": st.column_config.NumberColumn(format="%.1f")})
     fig = go.Figure()
     intervals(fig, [mlabel(t) for t in bt["target"]], bt, bt["actual"], "Realised base index")
     fig.add_trace(go.Scatter(x=[mlabel(t) for t in bt["target"]], y=bt["naive_30d"], mode="markers", name="Naive forecast",
@@ -100,17 +122,23 @@ if bt is not None:
 
 # ---------------------------------------------------------------- latent states
 st.subheader("What the model sees: weekly states")
-fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.08,
-                    subplot_titles=("Price level, €/MWh", "Merit-order slope, €/MWh per s.d. of residual load",
-                                    "Daily noise scale, €/MWh"))
-for i, (col, name) in enumerate((("level_mean", "Level"), ("beta_mean", "Slope"), ("sigma_mean", "Noise scale")), 1):
+STATES = {
+    "v1": (("level_mean", "Price level, €/MWh"), ("beta_mean", "Merit-order slope, €/MWh per s.d. of residual load"),
+           ("sigma_mean", "Daily noise scale, €/MWh")),
+    "v2": (("m_mean", "Price as a multiple of gas plant cost"), ("s_mean", "Slope: change in the multiple per s.d. of residual load"),
+           ("sigma_mean", "Noise scale (before scaling with fuel cost)")),
+}[version]
+fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.08, subplot_titles=[t for _, t in STATES])
+for i, (col, name) in enumerate(STATES, 1):
     fig.add_trace(go.Scatter(x=states["week_start"], y=states[col], name=name, mode="lines",
                              line=dict(color=MODEL, width=2), showlegend=False,
-                             hovertemplate=f"{name}: %{{y:.1f}}<extra></extra>"), row=i, col=1)
+                             hovertemplate="%{y:.2f}<extra></extra>"), row=i, col=1)
 fig.update_annotations(font=dict(size=12, color=INK2), x=0, xanchor="left")
-show(fig_defaults(fig, "", "", 620), states.round(2), key="states")
-st.caption("Posterior means. The level stands in for fuel and carbon costs; the slope is how much prices react "
-           "to residual load, which is steep when gas sets the price.")
+show(fig_defaults(fig, "", "", 620), states.round(3), key="states")
+st.caption({"v1": "Posterior means. The level stands in for fuel and carbon costs; the slope is how much prices react "
+                  "to residual load, which is steep when gas sets the price.",
+            "v2": "Posterior means. A multiple near 1 means the power price sits at the cost of gas-fired power; "
+                  "lower means cheaper plants (renewables, coal, imports) set the price more often."}[version])
 
 with st.expander("Model details and parameters"):
     st.markdown((REPORTS / "README.md").read_text().split("## Fit")[0].split("## What the model does")[1])

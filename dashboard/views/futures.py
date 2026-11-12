@@ -7,7 +7,7 @@ from lib import INK2, MUTED, SERIES, color_map, fig_defaults, page, q, rebuild_b
 page("EEX futures", "Daily settlement prices collected from EEX. History starts when the scraper started (Sept 2026).")
 rebuild_button()
 
-MONTHS_IN = {"Month": 1, "Quarter": 3, "Year": 12}
+MONTHS_IN = {"Month": 1, "Quarter": 3, "Season": 6, "Year": 12}
 
 
 def contract_label(maturity, mtype) -> str:
@@ -17,13 +17,25 @@ def contract_label(maturity, mtype) -> str:
         return f"Q{(start.month - 1) // 3 + 1}-{start:%y}"
     if mtype == "Year":
         return f"Cal-{start:%y}"
+    if mtype == "Season":
+        return f"{'Sum' if start.month == 4 else 'Win'}-{start:%y}"
     return start.strftime("%b-%y")
 
 
 # ---------------------------------------------------------------- filters
-f = st.columns([1.2, 1, 1, 1.4, 1.4])
-market = f[0].segmented_control("Market", ["Power", "Carbon"], default="Power")
-if market == "Power":
+f = st.columns([1.6, 1, 1, 1.4, 1.4])
+market = f[0].segmented_control("Market", ["Power", "Gas", "Carbon"], default="Power")
+if market == "Gas":
+    hubs = q("SELECT DISTINCT area FROM eex_settlements WHERE commodity = 'NATGAS' ORDER BY area")["area"].tolist()
+    if not hubs:
+        st.info("EEX gas futures are collected from the next scraper run on.")
+        st.stop()
+    area = f[1].selectbox("Hub", hubs, index=hubs.index("TTF") if "TTF" in hubs else 0, help="TTF: Dutch hub, the European benchmark. THE: German market area.")
+    product = "Physical"
+    where = "commodity = 'NATGAS' AND area = ? AND product = ?"
+    params = (area, product)
+    unit = "€/MWh"
+elif market == "Power":
     areas = q("SELECT DISTINCT area FROM eex_settlements WHERE commodity = 'POWER' ORDER BY area")["area"].tolist()
     area = f[1].selectbox("Area", areas, index=areas.index("DE") if "DE" in areas else 0)
     product = f[2].selectbox("Load", ["Base", "Peak"])
@@ -57,7 +69,7 @@ curve["end"] = [s + pd.DateOffset(months=MONTHS_IN.get(t, 1)) for s, t in zip(cu
 
 # ---------------------------------------------------------------- forward curve
 fig = go.Figure()
-types = [t for t in ("Month", "Quarter", "Year") if t in set(curve["maturity_type"])]
+types = [t for t in ("Month", "Quarter", "Season", "Year") if t in set(curve["maturity_type"])]
 cmap = color_map(types)
 for t in types:
     for when, dash, width, suffix in ((trade_date, "solid", 3, ""), (compare, "dot", 2, " (compare)")):
@@ -66,7 +78,7 @@ for t in types:
         d = curve[(curve["maturity_type"] == t) & (curve["trade_date"] == when)]
         if d.empty:
             continue
-        if market == "Power":
+        if market in ("Power", "Gas"):
             xs, ys, texts = [], [], []
             for _, r in d.iterrows():
                 xs += [r["start"], r["end"], None]
@@ -84,13 +96,14 @@ for t in types:
                                      line=dict(color=SERIES[0] if not suffix else MUTED, width=width, dash=dash),
                                      marker=dict(size=8), customdata=d[["contract"]],
                                      hovertemplate=f"%{{customdata[0]}}: %{{y:.2f}} {unit}<extra>{when:%d %b}</extra>"))
-title = (f"{area} {product} forward curve" if market == "Power" else f"{product} futures by expiry") + f", {trade_date:%d %b %Y}"
+title = ({"Power": f"{area} {product} forward curve", "Gas": f"{area} gas forward curve"}.get(market)
+         or f"{product} futures by expiry") + f", {trade_date:%d %b %Y}"
 fig.update_layout(hovermode="closest")
-if market == "Power":  # open on the liquid part of the curve; drag or double-click to see all of it
+if market in ("Power", "Gas"):  # open on the liquid part of the curve; drag or double-click to see all of it
     fig.update_xaxes(range=[curve["start"].min() - pd.Timedelta(days=15), curve["start"].min() + pd.DateOffset(years=4)])
 show(fig_defaults(fig, title, unit, 440),
      curve[curve["trade_date"] == trade_date][["contract", "maturity_type", "settlement", "volume", "open_interest"]])
-if market == "Power":
+if market in ("Power", "Gas"):
     st.caption("Each line spans its delivery period; dotted lines show the comparison date. "
                "The chart opens on the next four years: double-click it to see the whole curve.")
 
@@ -98,7 +111,7 @@ if market == "Power":
 st.subheader("Settlement history")
 latest = curve[curve["trade_date"] == trade_date]
 choices = latest["contract"].tolist()
-default = choices[:3] if market == "Power" else [c for c in choices if c.startswith("Dec")][:3] or choices[:3]
+default = choices[:3] if market != "Carbon" else [c for c in choices if c.startswith("Dec")][:3] or choices[:3]
 picked = st.multiselect("Contracts (up to 8)", choices, default=default, max_selections=8)
 if picked:
     keys = latest[latest["contract"].isin(picked)][["maturity", "maturity_type", "contract"]]

@@ -12,6 +12,7 @@ nav = st.navigation({
         st.Page("views/overview.py", title="Overview", default=True),
         st.Page("views/futures.py", title="EEX futures", url_path="futures"),
         st.Page("views/spot_prices.py", title="Day-ahead prices", url_path="spot-prices"),
+        st.Page("views/fuels.py", title="Gas and carbon", url_path="gas-carbon"),
     ],
     "Drivers": [
         st.Page("views/fundamentals.py", title="Fundamentals", url_path="fundamentals"),
