@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import warnings
 import pathlib
 import sys
 
@@ -13,6 +14,9 @@ import plotly.io as pio
 import streamlit as st
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+# Table views round whole frames, which pandas warns about for date columns; the result is right.
+warnings.filterwarnings("ignore", message="obj.round has no effect")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -20,6 +24,18 @@ from pipeline.build_db import DATA, DB, rebuild  # noqa: E402
 
 REPORTS = ROOT / "reports" / "de_base_month_v3_both"  # current model
 REPORTS_V1 = ROOT / "reports" / "de_base_month"
+
+
+def model_file(report_dir: pathlib.Path, name: str) -> pathlib.Path:
+    """A model output file. The daily refit (models.* --live) writes forecast.csv, params.json and
+    states.csv to the data repo under model/<report folder name>/; use those when they exist, else
+    the copies in reports/ from the last manual run. Backtests and READMEs always come from reports/."""
+    live_dir = DATA / "model" / report_dir.name
+    use_live = (live_dir / "forecast.csv").exists() and (
+        not (report_dir / "forecast.csv").exists()
+        or (live_dir / "forecast.csv").stat().st_mtime >= (report_dir / "forecast.csv").stat().st_mtime)
+    # A local refit (the button on the model page) writes to reports/; use whichever run is newer.
+    return (live_dir if use_live else report_dir) / name
 
 # ---------------------------------------------------------------- palette
 # Categorical hues, assigned in this fixed order and never cycled (max 8 series).

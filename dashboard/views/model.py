@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from lib import INK, INK2, MODEL, OBSERVED, ROOT, fig_defaults, page, rebuild_button, show
+from lib import DATA, INK, INK2, MODEL, OBSERVED, ROOT, model_file, fig_defaults, page, q, rebuild_button, show
 
 page("Model: German base month", "Bayesian model of the monthly German base price index, compared with EEX futures.")
 rebuild_button()
@@ -31,9 +31,10 @@ if not (REPORTS / "forecast.csv").exists():
     st.warning(f"No model outputs yet. Run `python -m {' '.join(module)} --backtest 24` first.")
     st.stop()
 
-fc = pd.read_csv(REPORTS / "forecast.csv", dtype={"month": str})
-params = json.loads((REPORTS / "params.json").read_text())
-states = pd.read_csv(REPORTS / "states.csv", parse_dates=["week_start"])
+fc = pd.read_csv(model_file(REPORTS, "forecast.csv"), dtype={"month": str})
+params = json.loads(model_file(REPORTS, "params.json").read_text())
+states = pd.read_csv(model_file(REPORTS, "states.csv"), parse_dates=["week_start"])
+live = model_file(REPORTS, "forecast.csv").parent != REPORTS
 bt = pd.read_csv(REPORTS / "backtest.csv", dtype={"target": str}) if (REPORTS / "backtest.csv").exists() else None
 
 
@@ -58,7 +59,14 @@ with st.sidebar:
         st.rerun()
 
 st.caption(f"Fitted on data through {params['origin']} ({params['weeks']} weeks, "
-           f"{params['divergences']} sampler divergences). EEX settlements from {fc['futures_trade_date'].iloc[0]}.")
+           f"{params['divergences']} sampler divergences). EEX settlements from {fc['futures_trade_date'].iloc[0]}. "
+           + ("From the daily refit on GitHub." if live else "From the last manual run."))
+latest_day = q("SELECT max(day) AS d FROM de_daily WHERE residual_load_gw IS NOT NULL")["d"].iloc[0]
+age = (pd.Timestamp(latest_day) - pd.Timestamp(params["origin"])).days
+if age > 3:
+    st.warning(f"This forecast is {age} days behind the data (data through {params['origin']}, latest complete "
+               f"day {pd.Timestamp(latest_day):%d %b}). Refit it with the button in the sidebar, or check the "
+               "Model daily workflow on GitHub.")
 
 
 def intervals(fig, x, df, observed, observed_name, row=None, col=None):
@@ -97,6 +105,42 @@ if "ttf_forward" in fc:
         + f"; EUA {fc['eua'].iloc[0]:.2f} €/t; TTF volatility {fc['gas_vol'].iloc[0]:.0%} a year.")
 st.caption("Probability below futures near 50% means model and market agree. Well above 50% means the model sees "
            "futures as expensive, well below means cheap." + (" Version 1 does not see gas prices." if version == "v1" else ""))
+
+# ---------------------------------------------------------------- forecast log
+log_path = DATA / "model" / "forecast_log.csv"
+if log_path.exists():
+    log = pd.read_csv(log_path, dtype={"month": str})
+    log = log[log["model"] == REPORTS.name]
+    if not log.empty:
+        st.subheader("Forecast log: model vs. futures over time")
+        log["run_day"] = pd.to_datetime(log["data_through"])
+        log = log.sort_values("run_utc").drop_duplicates(["data_through", "month"], keep="last")
+        months = sorted(log["month"].unique())
+        pick_month = st.selectbox("Delivery month", months, index=len(months) - 1 if len(months) < 3 else 0,
+                                  format_func=mlabel, key="log_month")
+        d = log[log["month"] == pick_month].sort_values("run_day")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=list(d["run_day"]) + list(d["run_day"][::-1]),
+                                 y=list(d["p95"]) + list(d["p05"][::-1]), fill="toself", mode="lines",
+                                 fillcolor="rgba(42,120,214,0.15)", line=dict(width=0), name="Model 90% interval",
+                                 hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=d["run_day"], y=d["mean"], name="Model mean", mode="lines+markers",
+                                 line=dict(color=MODEL, width=2), marker=dict(size=7),
+                                 hovertemplate="Model: %{y:.1f} €/MWh<extra></extra>"))
+        fig.add_trace(go.Scatter(x=d["run_day"], y=d["futures"], name="EEX settlement", mode="lines+markers",
+                                 line=dict(color=OBSERVED, width=2), marker=dict(size=7),
+                                 hovertemplate="Futures: %{y:.1f} €/MWh<extra></extra>"))
+        actual = q("SELECT base_index, complete FROM de_month_index WHERE month = ?", (pick_month,))
+        if len(actual) and bool(actual["complete"].iloc[0]):
+            fig.add_hline(y=float(actual["base_index"].iloc[0]), line=dict(color=INK, width=1.5, dash="dash"),
+                          annotation_text=f"Realised {float(actual['base_index'].iloc[0]):.1f}",
+                          annotation_position="top left")
+        fig.update_xaxes(title="Forecast made with data through")
+        show(fig_defaults(fig, f"DE base {mlabel(pick_month)}: each day's forecast and the futures price", "€/MWh", 380),
+             d[["data_through", "mean", "p05", "p95", "futures", "futures_trade_date", "p_futures_above_model"]].round(2),
+             key="fclog")
+        st.caption(f"One point per daily refit since {log['run_day'].min():%d %b %Y}. Once months settle, this is "
+                   "the out-of-sample record of whether the model or the futures were closer.")
 
 # ---------------------------------------------------------------- backtest
 if bt is not None:

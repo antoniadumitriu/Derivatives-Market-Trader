@@ -45,6 +45,7 @@ import pandas as pd
 from numpyro.infer import MCMC, NUTS, init_to_value
 
 from models.de_base_month import crps, next_month, summary
+from connectors.common import DATA
 from pipeline.build_db import CCGT_EFFICIENCY, DB, GAS_EMISSIONS_T_PER_MWH, rebuild
 
 numpyro.set_host_device_count(2)
@@ -248,7 +249,24 @@ def forward_at(fuel, curve, origin, month, backtest=False):
 
 # ---------------------------------------------------------------- runs
 
-def run_forecast(daily, fuel, curve, seasonal=False, out=OUT, capacity=None):
+def append_log(res: pd.DataFrame, model_name: str, origin) -> None:
+    """Add this run's forecasts to the forecast log in the data repo, one row per delivery
+    month, so the model can later be scored against futures out of sample."""
+    log = DATA / "model" / "forecast_log.csv"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    rows = res.reset_index().assign(
+        run_utc=pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ"), model=model_name,
+        data_through=str(pd.Timestamp(origin).date()))
+    rows["months_ahead"] = [
+        (int(m[:4]) * 12 + int(m[4:])) - (pd.Timestamp(origin).year * 12 + pd.Timestamp(origin).month) for m in rows["month"]]
+    cols = ["run_utc", "model", "data_through", "month", "months_ahead", "mean", "p05", "p25", "p50", "p75", "p95",
+            "futures", "futures_trade_date", "p_futures_above_model", "ttf_forward", "ttf_source", "eua",
+            "gas_plant_cost"]
+    rows[cols].to_csv(log, mode="a", header=not log.exists(), index=False)
+    print(f"Appended {len(rows)} rows to {log}")
+
+
+def run_forecast(daily, fuel, curve, seasonal=False, out=OUT, capacity=None, live=False):
     origin = daily["day"].max()
     fit = Fit(daily, origin, samples=1000, warmup=1000, seasonal=seasonal, capacity=capacity)
     print(f"Fit through {origin.date()}: {fit.n_weeks} weeks, {fit.seconds:.0f}s, {fit.divergences} divergences")
@@ -270,6 +288,11 @@ def run_forecast(daily, fuel, curve, seasonal=False, out=OUT, capacity=None):
                   "gas_plant_cost": float(srmc(fwd, eua))})
         rows.append(s)
     res = pd.DataFrame(rows).set_index("month")
+    if live:
+        # Daily runs: outputs go to the data repo (they contain futures prices), plus the log.
+        append_log(res, out.name, origin)
+        out = DATA / "model" / out.name
+        out.mkdir(parents=True, exist_ok=True)
     res.to_csv(out / "forecast.csv")
     p = fit.post
     params = {k: summary(p[k]) for k in ("tau_m", "tau_s", "tau_logsig", "phi", "gamma", "nu")}
@@ -321,13 +344,15 @@ def main(seasonal=False, out=OUT, capacity_adjusted=False):
     ap = argparse.ArgumentParser()
     ap.add_argument("--backtest", type=int, default=0)
     ap.add_argument("--no-forecast", action="store_true")
+    ap.add_argument("--live", action="store_true",
+                    help="write the forecast to the data repo (model/<version>/) and append to its forecast log")
     args = ap.parse_args()
     out.mkdir(parents=True, exist_ok=True)
     rebuild()
     daily, fuel, curve = load_daily(), load_fuel(), load_curve()
     cap = load_capacity() if capacity_adjusted else None
     if not args.no_forecast:
-        run_forecast(daily, fuel, curve, seasonal, out, cap)
+        run_forecast(daily, fuel, curve, seasonal, out, cap, live=args.live)
     if args.backtest:
         run_backtest(daily, fuel, args.backtest, seasonal, out, cap)
 

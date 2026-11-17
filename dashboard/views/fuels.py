@@ -17,6 +17,12 @@ with f[1]:
 trunc = {"Day": "day", "Week": "week", "Month": "month"}[grain or "Week"]
 
 latest = q("SELECT * FROM fuel_daily WHERE ttf_eur_mwh IS NOT NULL ORDER BY day DESC LIMIT 1").iloc[0]
+# Previous distinct EUA settlement and the gas plant cost on that day, for day-on-day changes.
+eua_prev = q("""SELECT eua_eur_t, gas_srmc_eur_mwh FROM fuel_daily
+                WHERE eua_source = 'eex' AND day < (SELECT max(day) FROM fuel_daily WHERE eua_source = 'eex')
+                  AND eua_eur_t <> ? ORDER BY day DESC LIMIT 1""", (float(latest["eua_eur_t"]),))
+cost_prev = q("""SELECT gas_srmc_eur_mwh FROM fuel_daily WHERE day < ? AND gas_srmc_eur_mwh IS NOT NULL
+                 AND isodow(day) <= 5 ORDER BY day DESC LIMIT 1""", (latest["day"],))
 eua_day = q("SELECT max(day) AS d FROM fuel_daily WHERE eua_source = 'eex' AND eua_eur_t IS NOT NULL")["d"].iloc[0]
 ttf = ttf_quote()
 c = st.columns(3)
@@ -24,11 +30,15 @@ c[0].metric("TTF gas front month (€/MWh)" + (" (intraday)" if ttf["intraday"] 
             None if ttf["prev"] is None else f"{ttf['value'] - ttf['prev']:+.2f}", delta_color="off",
             help=f"{ttf['label']}. Change is against the previous trading day.")
 c[1].metric("EUA carbon (€/t)", f"{latest['eua_eur_t']:.2f}",
-            help="EEX December future, last settlement"
+            None if eua_prev.empty else f"{latest['eua_eur_t'] - eua_prev['eua_eur_t'].iloc[0]:+.2f}", delta_color="off",
+            help="EEX December future, last settlement. Change is against the previous settlement"
                  + (f" ({pd.Timestamp(eua_day):%d %b %Y})" if pd.notna(eua_day) else "")
                  + ". Before Sept 2026 the history uses a carbon ETC scaled to the EEX level.")
 c[2].metric("Gas plant cost (€/MWh)", f"{latest['gas_srmc_eur_mwh']:.2f}",
-            help=f"Fuel and carbon cost of a gas-fired plant at {CCGT_EFFICIENCY:.0%} efficiency: "
+            None if cost_prev.empty else f"{latest['gas_srmc_eur_mwh'] - cost_prev['gas_srmc_eur_mwh'].iloc[0]:+.2f}",
+            delta_color="off",
+            help="Change is against the previous weekday. "
+                 f"Fuel and carbon cost of a gas-fired plant at {CCGT_EFFICIENCY:.0%} efficiency: "
                  f"(gas + {GAS_EMISSIONS_T_PER_MWH} t/MWh x carbon) / {CCGT_EFFICIENCY}.")
 
 # ---------------------------------------------------------------- gas plant cost vs power price
@@ -64,31 +74,37 @@ with right:
 
 # ---------------------------------------------------------------- TTF forward curve
 st.subheader("TTF forward curve")
-curve = q("""SELECT CAST(trade_date AS DATE) AS trade_date, CAST(delivery_month AS VARCHAR) AS month, close
-             FROM ttf_curve ORDER BY trade_date""")
-eex_gas = q("""SELECT trade_date, area, maturity, maturity_type, settlement FROM eex_settlements
-               WHERE commodity = 'NATGAS' AND maturity_type = 'Month' AND settlement IS NOT NULL""")
+eex_gas = q("""SELECT CAST(trade_date AS DATE) AS trade_date, CAST(maturity AS VARCHAR) AS month, settlement AS close
+               FROM eex_settlements WHERE commodity = 'NATGAS' AND area = 'TTF' AND product = 'Physical'
+                 AND maturity_type = 'Month' AND settlement IS NOT NULL
+                 AND maturity >= year(CAST(trade_date AS DATE)) * 100 + month(CAST(trade_date AS DATE))""")
 if not eex_gas.empty:
-    st.caption("EEX TTF and THE gas settlements are now collected daily; see the EEX futures page for the full curves.")
-# Only dates with at least 3 contracts priced (Yahoo fills some contracts later in the day).
+    curve, source = eex_gas, "EEX settlements"
+else:  # before the scraper collected gas: the few contracts Yahoo lists
+    curve = q("""SELECT CAST(trade_date AS DATE) AS trade_date, CAST(delivery_month AS VARCHAR) AS month, close
+                 FROM ttf_curve""")
+    source = "Yahoo Finance"
 counts = curve.groupby("trade_date")["month"].nunique()
 dates = sorted(counts[counts >= min(3, counts.max())].index, reverse=True)
 if dates:
-    cc = st.columns([1.5, 1.5, 3])
+    cc = st.columns([1.5, 1.5, 1.2, 1.8])
     d1 = cc[0].selectbox("Trade date", dates, format_func=lambda x: f"{pd.Timestamp(x):%a %d %b %Y}")
     older = [x for x in dates if x < d1]
     d0 = cc[1].selectbox("Compare with", ["None"] + older, index=min(5, len(older)),
                          format_func=lambda x: x if x == "None" else f"{pd.Timestamp(x):%a %d %b %Y}")
+    horizon = cc[2].selectbox("Months shown", [12, 24, 36, 120], index=1,
+                              format_func=lambda n: "All" if n == 120 else f"{n}")
     fig = go.Figure()
     for when, dash, color in ((d1, "solid", SERIES[0]), (d0, "dot", MUTED)):
         if when == "None":
             continue
-        k = curve[curve["trade_date"] == when].sort_values("month")
-        k["label"] = pd.to_datetime(k["month"], format="%Y%m").dt.strftime("%b %y")
+        k = curve[curve["trade_date"] == when].sort_values("month").head(horizon).copy()
+        k["label"] = pd.to_datetime(k["month"], format="%Y%m")
         fig.add_trace(go.Scatter(x=k["label"], y=k["close"], mode="lines+markers", name=f"{pd.Timestamp(when):%d %b %Y}",
-                                 line=dict(color=color, width=2, dash=dash), marker=dict(size=8),
-                                 hovertemplate="%{x}: %{y:.2f} €/MWh<extra></extra>"))
+                                 line=dict(color=color, width=2, dash=dash), marker=dict(size=6),
+                                 hovertemplate="%{x|%b %y}: %{y:.2f} €/MWh<extra></extra>"))
     fig.update_layout(hovermode="x unified")
-    show(fig_defaults(fig, "TTF by delivery month (Yahoo Finance)", "€/MWh", 360),
-         curve[curve["trade_date"] == d1], key="ttfcurve")
-    st.caption("Yahoo lists only the nearer TTF contracts. The model uses these prices for the months it forecasts.")
+    show(fig_defaults(fig, f"TTF by delivery month ({source})", "€/MWh", 380),
+         curve[curve["trade_date"] == d1].sort_values("month"), key="ttfcurve")
+    st.caption("Monthly TTF contracts; summer months trade below winter ones. The model uses these prices "
+               "for the months it forecasts.")

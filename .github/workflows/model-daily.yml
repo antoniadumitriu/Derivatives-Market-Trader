@@ -1,0 +1,46 @@
+name: Model daily
+
+on:
+  # Refit after each EEX run, so the forecast is compared with the latest settlements.
+  # It also runs when the EEX run partly failed: older futures are better than no refit.
+  workflow_run:
+    workflows: ["EEX daily settlements"]
+    types: [completed]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read  # outputs go to the private data repo with DATA_REPO_TOKEN
+
+concurrency:
+  group: model
+  cancel-in-progress: false
+
+jobs:
+  refit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DMT_DATA_DIR: ${{ github.workspace }}/data-repo
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the data repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/derivatives-market-data
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          path: data-repo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install "pandas>=2.2" "requests>=2.31" "duckdb>=1.1" "numpyro>=0.15" "jax>=0.4"
+
+      - name: Refit the German base month model and log its forecast
+        run: python -m models.de_base_month_v3 --live
+
+      - name: Commit the forecast to the data repo
+        run: .github/scripts/commit-data.sh "Model forecast $(date -u +%F)"

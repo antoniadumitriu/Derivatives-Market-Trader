@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from lib import INK2, MODEL, OBSERVED, fig_defaults, page, q, rebuild_button, show, ttf_quote
+from lib import DATA, INK2, MODEL, OBSERVED, fig_defaults, page, q, rebuild_button, show, ttf_quote
 
 page("Overview", "European power and carbon: headline numbers and data health. Prices in €/MWh unless noted.")
 rebuild_button()
@@ -26,8 +26,14 @@ eua = q("""
 month_now = q("SELECT month, base_index, days FROM de_month_index ORDER BY month DESC LIMIT 1")
 model = None
 try:
-    from lib import REPORTS
-    model = pd.read_csv(REPORTS / "forecast.csv", dtype={"month": str}).iloc[0]
+    import json
+
+    from lib import REPORTS, model_file
+    model = pd.read_csv(model_file(REPORTS, "forecast.csv"), dtype={"month": str}).iloc[0]
+    model_through = json.loads(model_file(REPORTS, "params.json").read_text())["origin"]
+    # Compare with the latest settlement for that month, not the one stored with the forecast.
+    latest_fut = q("""SELECT trade_date, settlement FROM de_base_month_futures WHERE month = ?
+                      ORDER BY trade_date DESC LIMIT 1""", (model["month"],))
 except FileNotFoundError:
     pass
 
@@ -58,9 +64,17 @@ c[4].metric("TTF gas front month" + (" (intraday)" if ttf["intraday"] else ""), 
             None if ttf["prev"] is None else f"{ttf['value'] - ttf['prev']:+.2f}", delta_color="off",
             help=f"{ttf['label']}. Change is against the previous trading day. See the Gas and carbon page.")
 if model is not None:
+    fut_now = latest_fut["settlement"].iloc[0] if len(latest_fut) else model["futures"]
+    fut_day = latest_fut["trade_date"].iloc[0] if len(latest_fut) else None
     c[5].metric(f"Model DE base {mlabel(model['month'])}", f"{model['mean']:.2f}",
-                f"{model['mean'] - model['futures']:+.2f} vs futures", delta_color="off",
-                help="Posterior mean of the current version of the Bayesian month model. See the model page.")
+                f"{model['mean'] - fut_now:+.2f} vs futures", delta_color="off",
+                help=f"Posterior mean of the current Bayesian month model, fitted on data through {model_through}. "
+                     + (f"Compared with the EEX settlement of {fut_day:%d %b %Y} ({fut_now:.2f}). " if fut_day else "")
+                     + "See the model page.")
+    age = (pd.Timestamp(latest["day"].iloc[0]) - pd.Timestamp(model_through)).days
+    if age > 3:
+        st.warning(f"The model forecast is {age} days old (data through {model_through}). The daily refit may "
+                   "have failed: check the Model daily workflow on GitHub, or refit on the model page.")
 
 # ---------------------------------------------------------------- price chart
 hist = q("""SELECT day, base FROM prices_daily WHERE zone = 'DE-LU' AND day >= current_date - INTERVAL 120 DAY ORDER BY day""")
@@ -89,10 +103,19 @@ health = q("""
     UNION ALL SELECT 'Cross-border flows', max(CAST(timestamp_utc AS TIMESTAMP)), count(*) FROM crossborder
     UNION ALL SELECT 'Weather actuals', max(CAST(timestamp_utc AS TIMESTAMP)), count(*) FROM weather_actuals
     UNION ALL SELECT 'Weather forecasts (issued)', max(CAST(issue_date AS TIMESTAMP)), count(*) FROM weather_forecasts
+    UNION ALL SELECT 'Gas, carbon proxy, EUR/USD (Yahoo)', max(CAST(date AS TIMESTAMP)), count(*) FROM market_prices
+    UNION ALL SELECT 'TTF forward curve (Yahoo)', max(CAST(trade_date AS TIMESTAMP)), count(*) FROM ttf_curve
 """)
+log_path = DATA / "model" / "forecast_log.csv"
+if log_path.exists():
+    flog = pd.read_csv(log_path)
+    health = pd.concat([health, pd.DataFrame([{"dataset": "Model forecasts (last refit)",
+                                                "latest": pd.Timestamp(flog["run_utc"].max()).tz_localize(None),
+                                                "rows": len(flog)}])], ignore_index=True)
 runs = []
 for name, table, okcol, failcol in (("EEX scraper", "runs_eex", "ok", "failed"),
                                     ("Energy-Charts", "runs_energy_charts", "ok", "failed"),
+                                    ("Yahoo Finance (gas, carbon)", "runs_market", "ok", "failed"),
                                     ("Open-Meteo", "runs_weather", None, None)):
     r = q(f"SELECT * FROM {table} ORDER BY run_utc DESC LIMIT 1").iloc[0]
     if okcol:
@@ -122,4 +145,10 @@ with right:
         st.markdown(f"**{r['source']}**: {icon[r['status']]}  \n"
                     f"<span style='color:{INK2}'>{r['last run (UTC)']} UTC, {r['detail']}</span>",
                     unsafe_allow_html=True)
-    st.caption("Runs happen on GitHub Actions. Pull the repo to see new data here.")
+    if log_path.exists():
+        last = flog.sort_values("run_utc").iloc[-1]
+        stale = (now - pd.Timestamp(last["run_utc"]).tz_localize(None)).days > 3
+        st.markdown(f"**Model refit**: {'⚠️ Over 3 days old' if stale else '✅ OK'}  \n"
+                    f"<span style='color:{INK2}'>{str(last['run_utc'])[:16].replace('T', ' ')} UTC, "
+                    f"data through {last['data_through']}</span>", unsafe_allow_html=True)
+    st.caption("Runs happen on GitHub Actions. Pull the data repo to see new data here.")
