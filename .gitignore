@@ -1,5 +1,8 @@
 debug/
 __pycache__/
 .venv/
-data/warehouse*.duckdb*
 reports/**/*.npy
+
+# Collected data lives in the private repo derivatives-market-data; only the local warehouse goes here.
+data/
+data-repo/

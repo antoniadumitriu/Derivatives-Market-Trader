@@ -1,6 +1,7 @@
-"""Build the local DuckDB warehouse from the CSVs in data/.
+"""Build the local DuckDB warehouse from the collected CSVs (the data repo; see
+connectors.common.data_dir for where it is looked for).
 
-  python -m pipeline.build_db            # writes data/warehouse.duckdb (not committed)
+  python -m pipeline.build_db            # writes data/warehouse.duckdb in this repo (not committed)
 
 Raw tables (copies of the CSVs as of the last build):
   eex_settlements, da_prices, generation, power_forecasts, crossborder,
@@ -26,25 +27,26 @@ import pathlib
 
 import duckdb
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-DATA = ROOT / "data"
-DB = DATA / "warehouse.duckdb"
+from connectors.common import ROOT, data_dir
+
+DATA = data_dir()
+DB = ROOT / "data" / "warehouse.duckdb"  # local build output, never committed
 
 # Points averaged for the German temperature series (demand centres only).
 DE_DEMAND_POINTS = ["de_hamburg", "de_berlin", "de_ruhr", "de_frankfurt", "de_munich", "de_stuttgart"]
 
 VIEWS = {
-    "eex_settlements": "data/eex/settlements/*.csv",
-    "da_prices": "data/energy_charts/prices/*.csv",
-    "generation": "data/energy_charts/generation/*.csv",
-    "power_forecasts": "data/energy_charts/forecasts/*.csv",
-    "crossborder": "data/energy_charts/crossborder/*.csv",
-    "installed_capacity": "data/energy_charts/installed_capacity.csv",
-    "weather_actuals": "data/weather/actuals/*.csv",
-    "weather_forecasts": "data/weather/forecasts/*.csv",
-    "weather_points": "data/weather/points.csv",
-    "market_prices": "data/market/daily.csv",
-    "ttf_curve": "data/market/ttf_curve.csv",
+    "eex_settlements": "eex/settlements/*.csv",
+    "da_prices": "energy_charts/prices/*.csv",
+    "generation": "energy_charts/generation/*.csv",
+    "power_forecasts": "energy_charts/forecasts/*.csv",
+    "crossborder": "energy_charts/crossborder/*.csv",
+    "installed_capacity": "energy_charts/installed_capacity.csv",
+    "weather_actuals": "weather/actuals/*.csv",
+    "weather_forecasts": "weather/forecasts/*.csv",
+    "weather_points": "weather/points.csv",
+    "market_prices": "market/daily.csv",
+    "ttf_curve": "market/ttf_curve.csv",
 }
 
 # Gas-fired plant used for the marginal cost: efficiency and emissions per MWh of gas burnt.
@@ -71,22 +73,28 @@ def complete_avg(expr: str, scale: str = "") -> str:
 
 
 RUN_LOGS = {
-    "runs_market": "data/market/runs.csv",
-    "runs_eex": "data/eex/runs.csv",
-    "runs_energy_charts": "data/energy_charts/runs.csv",
-    "runs_weather": "data/weather/runs.csv",
+    "runs_market": "market/runs.csv",
+    "runs_eex": "eex/runs.csv",
+    "runs_energy_charts": "energy_charts/runs.csv",
+    "runs_weather": "weather/runs.csv",
 }
 
 
 def build(path: pathlib.Path = DB) -> duckdb.DuckDBPyConnection:
+    if not (DATA / "eex").is_dir():
+        raise SystemExit(
+            f"No data found at {DATA}. Clone the data repo next to this one "
+            "(git clone https://github.com/antoniadumitriu/derivatives-market-data ../derivatives-market-data) "
+            "or set DMT_DATA_DIR to where it is.")
+    path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(path))
     con.execute("SET TimeZone = 'UTC'")
     for name, pattern in VIEWS.items():
         con.execute(f"""CREATE OR REPLACE TABLE {name} AS
-            SELECT * FROM read_csv('{ROOT / pattern}', union_by_name = true, header = true)""")
+            SELECT * FROM read_csv('{DATA / pattern}', union_by_name = true, header = true)""")
     for name, pattern in RUN_LOGS.items():
         con.execute(f"""CREATE OR REPLACE TABLE {name} AS
-            SELECT * FROM read_csv('{ROOT / pattern}', header = true, all_varchar = true)""")
+            SELECT * FROM read_csv('{DATA / pattern}', header = true, all_varchar = true)""")
 
     # Daily aggregates (delivery day in Europe/Berlin) for every country, zone and point.
     local_day = "CAST(timezone('Europe/Berlin', CAST(timestamp_utc AS TIMESTAMPTZ)) AS DATE)"

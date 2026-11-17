@@ -7,10 +7,10 @@ How it works:
   2. Filter the catalog to the contracts in SCOPE.
   3. From inside the page (so requests look exactly like the website's own),
      fetch each contract's settlement table for the last LOOKBACK_DAYS days.
-  4. Upsert the rows into data/eex/settlements/<year>.csv, keyed by contract,
+  4. Upsert the rows into eex/settlements/<year>.csv in the data repo, keyed by contract,
      delivery period and trade date (latest value wins, so corrections are
-     picked up). Write the in-scope catalog to data/eex/contracts.csv and append a
-     line to data/eex/runs.csv.
+     picked up). Write the in-scope catalog to eex/contracts.csv and append a
+     line to eex/runs.csv.
 
 The script exits with an error if most requests fail, so a broken run shows
 up as a failed workflow and GitHub emails you.
@@ -26,6 +26,8 @@ import urllib.parse
 
 import pandas as pd
 from playwright.sync_api import sync_playwright
+
+from connectors.common import data_dir
 
 PAGE_URL = "https://www.eex.com/en/market-data/power/futures"
 API = "https://api.eex-group.com/pub"
@@ -60,7 +62,7 @@ def in_scope(c: dict) -> bool:
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-DATA = ROOT / "data" / "eex"
+DATA = data_dir() / "eex"
 DEBUG = ROOT / "debug"
 
 KEY = ["short_code", "maturity", "trade_date"]

@@ -16,7 +16,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pipeline.build_db import DB, rebuild  # noqa: E402
+from pipeline.build_db import DATA, DB, rebuild  # noqa: E402
 
 REPORTS = ROOT / "reports" / "de_base_month_v3_both"  # current model
 REPORTS_V1 = ROOT / "reports" / "de_base_month"
@@ -55,7 +55,7 @@ def page(title: str, caption: str | None = None):
         st.caption(caption)
 
 
-@st.cache_resource(show_spinner="Building the warehouse from data/ ...")
+@st.cache_resource(show_spinner="Building the warehouse from the data repo ...")
 def _connection(stamp: float) -> duckdb.DuckDBPyConnection:
     if not DB.exists() or DB.stat().st_mtime < stamp:
         rebuild()
@@ -70,7 +70,7 @@ def _connection(stamp: float) -> duckdb.DuckDBPyConnection:
 
 def data_stamp() -> float:
     """Latest modification time of any data CSV, so the warehouse rebuilds after a git pull."""
-    return max(p.stat().st_mtime for p in (ROOT / "data").rglob("*.csv"))
+    return max((p.stat().st_mtime for p in DATA.rglob("*.csv")), default=0.0)
 
 
 def con() -> duckdb.DuckDBPyConnection:

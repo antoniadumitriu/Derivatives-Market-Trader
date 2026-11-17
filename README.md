@@ -22,7 +22,20 @@ Opens at http://localhost:8501. Pages:
 | Weather | Actuals and the latest 16-day forecast at the tracked points, and German temperature vs. normal |
 | German base month | The Bayesian model (version 3, or earlier versions for comparison): forecasts vs. EEX futures, the 24-month backtest, and the weekly states it estimates. A sidebar button refits it on the latest data |
 
-Every chart has hover values and a table view. The dashboard reads `data/warehouse.duckdb`, which it rebuilds from the CSVs on start and whenever they change (for example after `git pull`).
+Every chart has hover values and a table view. The dashboard reads `data/warehouse.duckdb`, which it rebuilds from the data repo on start and whenever its CSVs change (for example after a `git pull` there).
+
+## Data
+
+The collected data is kept in a separate private repo, `derivatives-market-data`. The workflows here
+collect it daily and push it there (using the `DATA_REPO_TOKEN` secret, a fine-grained token with
+read/write access to that repo only). To work with it locally, clone it next to this repo:
+
+```
+git clone https://github.com/antoniadumitriu/derivatives-market-data ../derivatives-market-data
+```
+
+or set `DMT_DATA_DIR` to wherever it is. Without it, the connectors write to `./data` (ignored by git),
+so you can also start from scratch: run the connectors with `--start` to backfill.
 
 ## Layout
 
@@ -33,13 +46,13 @@ connectors/
   energy_charts/fetch.py Energy-Charts: spot prices, generation, forecasts, flows, capacity
   open_meteo/fetch.py    Open-Meteo: weather actuals and forecast snapshots
   yahoo/fetch.py         Yahoo Finance: TTF gas, carbon proxy, EUR/USD
-data/
+data repo (private, see Data above)
   eex/                   settlements/<year>.csv, contracts.csv, runs.csv
   energy_charts/         prices/, generation/, forecasts/, crossborder/ (one CSV per UTC month),
                          installed_capacity.csv, runs.csv
   weather/               actuals/, forecasts/ (one CSV per month), points.csv, runs.csv
 dashboard/                Streamlit dashboard (app.py, views/, lib.py)
-pipeline/build_db.py     loads all CSVs into data/warehouse.duckdb (local, not committed)
+pipeline/build_db.py     loads all CSVs into data/warehouse.duckdb in this repo (local, not committed)
 models/de_base_month_v3.py  current model: v2 with today's solar fleet in the residual-load scenarios
                             and a calendar-month term (each fix also available alone as a variant)
 models/de_base_month_v2.py  Bayesian model anchored on gas and carbon costs (the code v3 builds on)

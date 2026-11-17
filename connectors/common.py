@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import pathlib
 import time
 
@@ -10,7 +11,24 @@ import pandas as pd
 import requests
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DATA = ROOT / "data"
+
+
+def data_dir() -> pathlib.Path:
+    """Where the collected data lives. The data is kept in a separate private repo
+    (derivatives-market-data). In order of preference:
+      1. the DMT_DATA_DIR environment variable (the workflows set this);
+      2. a clone of the data repo next to this one: ../derivatives-market-data;
+      3. ./data inside this repo (ignored by git), for a quick local start."""
+    env = os.environ.get("DMT_DATA_DIR")
+    if env:
+        return pathlib.Path(env).expanduser().resolve()
+    sibling = ROOT.parent / "derivatives-market-data"
+    if sibling.is_dir():
+        return sibling
+    return ROOT / "data"
+
+
+DATA = data_dir()
 
 TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"  # all timestamps are stored as UTC strings in this format
 

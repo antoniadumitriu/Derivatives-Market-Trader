@@ -18,7 +18,7 @@ on:
         default: all
 
 permissions:
-  contents: write  # lets the workflow commit the new data
+  contents: read  # data is pushed to the private data repo with DATA_REPO_TOKEN, not to this repo
 
 concurrency:
   group: fundamentals
@@ -29,10 +29,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
+      DMT_DATA_DIR: ${{ github.workspace }}/data-repo  # where connectors read and write data
       PYTHONUNBUFFERED: "1"  # show progress in the log as it happens
       START: ${{ inputs.start }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check out the data repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/derivatives-market-data
+          token: ${{ secrets.DATA_REPO_TOKEN }}  # fine-grained token, contents read/write on the data repo
+          path: data-repo
 
       - uses: actions/setup-python@v5
         with:
